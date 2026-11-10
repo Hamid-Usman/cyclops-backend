@@ -4,10 +4,15 @@ import { createObserveModule } from '@nestjs/observe';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CreateUsers1710000000000 } from './auth/create-users.migration';
 import { CreateClients1710000000001 } from './client/create-clients.migration';
+import { CreateProjectsAndProposals1710000000002 } from './proposal/create-projects-and-proposals.migration';
+import { CreateInvoices1710000000003 } from './invoice/create-invoices.migration';
 import { AuthModule } from './auth/auth.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ClientModule } from './client/client.module';
+import { ProjectModule } from './project/project.module';
+import { ProposalModule } from './proposal/proposal.module';
+import { InvoiceModule } from './invoice/invoice.module';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -28,13 +33,21 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         type: 'mysql' as const,
         url: config.getOrThrow<string>('DATABASE_URL'),
         autoLoadEntities: true,
-        migrations: [CreateUsers1710000000000, CreateClients1710000000001],
+        migrations: [
+          CreateUsers1710000000000,
+          CreateClients1710000000001,
+          CreateProjectsAndProposals1710000000002,
+          CreateInvoices1710000000003,
+        ],
         migrationsRun: true,
         synchronize: false,
       }),
     }),
     AuthModule,
     ClientModule,
+    ProjectModule,
+    ProposalModule,
+    InvoiceModule,
   ],
   controllers: [AppController],
   providers: [AppService],
