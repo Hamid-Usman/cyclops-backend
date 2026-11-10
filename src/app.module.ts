@@ -13,6 +13,7 @@ import { ClientModule } from './client/client.module';
 import { ProjectModule } from './project/project.module';
 import { ProposalModule } from './proposal/proposal.module';
 import { InvoiceModule } from './invoice/invoice.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -48,6 +49,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     ProjectModule,
     ProposalModule,
     InvoiceModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],
