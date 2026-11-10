@@ -26,5 +26,6 @@ import { User } from './user.entity';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard],
+  exports: [JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

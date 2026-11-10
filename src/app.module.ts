@@ -3,11 +3,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { createObserveModule } from '@nestjs/observe';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CreateUsers1710000000000 } from './auth/create-users.migration';
+import { CreateClients1710000000001 } from './client/create-clients.migration';
 import { AuthModule } from './auth/auth.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { ClientController } from './client/client.controller';
-import { ClientService } from './client/client.service';
 import { ClientModule } from './client/client.module';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -29,7 +28,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         type: 'mysql' as const,
         url: config.getOrThrow<string>('DATABASE_URL'),
         autoLoadEntities: true,
-        migrations: [CreateUsers1710000000000],
+        migrations: [CreateUsers1710000000000, CreateClients1710000000001],
         migrationsRun: true,
         synchronize: false,
       }),
@@ -37,7 +36,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AuthModule,
     ClientModule,
   ],
-  controllers: [AppController, ClientController],
-  providers: [AppService, ClientService],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
