@@ -57,6 +57,27 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## Authentication
+
+Authentication uses MySQL, scrypt password hashes, and one-hour JWT bearer
+tokens. Create a MySQL database, copy `.env.example` to `.env`, set
+`DATABASE_URL`, and replace `JWT_SECRET` with a random secret of at least 32
+characters. The users-table migration runs automatically when the app starts;
+schema synchronization is disabled.
+
+Endpoints:
+
+- `POST /auth/register` with `{ "email": "user@example.com", "password": "at-least-8-characters", "displayName": "User Name" }`
+- `POST /auth/login` with `{ "email": "user@example.com", "password": "at-least-8-characters" }`
+- `GET /auth/me` with `Authorization: Bearer <accessToken>`
+
+Register and login return an `accessToken`, `tokenType`, `expiresIn`, and the
+public user profile. Email addresses are case-insensitive, and duplicate
+registrations return `409 Conflict`.
+
+Interactive API documentation is available at `/api/docs` when the app is
+running. The generated OpenAPI JSON is available at `/api/docs-json`.
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

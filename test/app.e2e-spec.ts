@@ -1,8 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { getDataSourceToken } from '@nestjs/typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { setupSwagger } from './../src/swagger';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -10,9 +13,30 @@ describe('AppController (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(ConfigService)
+      .useValue({
+        getOrThrow: (key: string) => {
+          if (key === 'DATABASE_URL') {
+            return 'mysql://user:password@localhost:3306/test';
+          }
+          if (key === 'JWT_SECRET') {
+            return 'test-secret-that-is-at-least-thirty-two-characters';
+          }
+          throw new Error(`Unexpected configuration key: ${key}`);
+        },
+      })
+      .overrideProvider(getDataSourceToken())
+      .useValue({
+        options: { type: 'mysql' },
+        entityMetadatas: [],
+        manager: {},
+        getRepository: jest.fn().mockReturnValue({}),
+      })
+      .compile();
 
     app = moduleFixture.createNestApplication();
+    setupSwagger(app);
     await app.init();
   });
 
@@ -23,7 +47,20 @@ describe('AppController (e2e)', () => {
       .expect('Hello World!');
   });
 
+  it('serves generated Swagger documentation', () => {
+    return request(app.getHttpServer())
+      .get('/api/docs-json')
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.info.title).toBe('Cyclops Backend API');
+        expect(body.paths['/auth/register'].post).toBeDefined();
+        expect(body.paths['/auth/me'].get.security).toEqual([
+          { 'access-token': [] },
+        ]);
+      });
+  });
+
   afterEach(async () => {
-    await app.close();
+    await app?.close();
   });
 });
