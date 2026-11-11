@@ -1,3 +1,4 @@
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Test } from '@nestjs/testing';
 import { LessThanOrEqual } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -46,6 +47,10 @@ describe('DashboardService', () => {
         DashboardService,
         { provide: getRepositoryToken(Project), useValue: projects },
         { provide: getRepositoryToken(Invoice), useValue: invoices },
+        {
+          provide: CACHE_MANAGER,
+          useValue: { wrap: (_key: string, load: () => unknown) => load() },
+        },
       ],
     }).compile();
     service = module.get(DashboardService);

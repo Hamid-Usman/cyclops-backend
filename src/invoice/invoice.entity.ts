@@ -5,6 +5,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -82,9 +83,12 @@ export class Invoice {
   @Column({ type: 'char', length: 3, default: 'USD' })
   currency: string;
 
-  // Before tax.
+  // Subtotal before tax: the sum of the line item amounts.
   @Column({ ...moneyColumn })
   amount: number;
+
+  @OneToMany(() => InvoiceLineItem, (item) => item.invoice)
+  lineItems: InvoiceLineItem[];
 
   // A percent, e.g. 7.5 means 7.5%.
   @Column({
@@ -127,4 +131,46 @@ export class Invoice {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'datetime' })
   updatedAt: Date;
+}
+
+@Entity('invoice_line_items')
+@Index('UQ_invoice_line_items_invoice_id_position', ['invoiceId', 'position'], {
+  unique: true,
+})
+export class InvoiceLineItem {
+  @PrimaryColumn('char', { length: 36 })
+  id: string;
+
+  @Column({ name: 'invoice_id', type: 'char', length: 36 })
+  invoiceId: string;
+
+  @ManyToOne(() => Invoice, (invoice) => invoice.lineItems, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({
+    name: 'invoice_id',
+    foreignKeyConstraintName: 'FK_invoice_line_items_invoice_id',
+  })
+  invoice: Invoice;
+
+  @Column({ type: 'int', unsigned: true })
+  position: number;
+
+  @Column({ type: 'varchar', length: 500 })
+  description: string;
+
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    unsigned: true,
+    transformer: numberTransformer,
+  })
+  quantity: number;
+
+  @Column({ ...moneyColumn, name: 'unit_price' })
+  unitPrice: number;
+
+  @Column({ ...moneyColumn })
+  amount: number;
 }

@@ -10,21 +10,30 @@ import { DataSource, EntityManager, LessThan, Repository } from 'typeorm';
 import { Project, ProjectStatus } from '../project/project.entity';
 import {
   CreateInvoiceDto,
+  InvoiceResponseDto,
   ListInvoicesQueryDto,
   MarkInvoicePaidDto,
+  toInvoiceResponse,
   UpdateInvoiceDto,
 } from './invoice.dto';
-import { Invoice, InvoiceStatus } from './invoice.entity';
-import { InvoiceResponseDto, toInvoiceResponse } from './invoice.responses';
+import { Invoice, InvoiceLineItem, InvoiceStatus } from './invoice.entity';
 import {
   assertInvoiceTransition,
   calculateInvoiceTotals,
+  calculateLineItems,
+  LineItemInput,
   prepareInvoiceForSend,
   toDateOnly,
 } from './invoice.rules';
 
 // Invoices are for agreed work only.
 const BILLABLE_STATUSES = [ProjectStatus.Active, ProjectStatus.Completed];
+
+// Loads the lines with each invoice, in their order on the invoice.
+const WITH_LINE_ITEMS = {
+  relations: { lineItems: true },
+  order: { lineItems: { position: 'ASC' } },
+} as const;
 
 function trimOrNull(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -40,7 +49,6 @@ function toInvoiceFields(
     fields.description = trimOrNull(input.description);
   if (input.notes !== undefined) fields.notes = trimOrNull(input.notes);
   if (input.currency !== undefined) fields.currency = input.currency;
-  if (input.amount !== undefined) fields.amount = input.amount;
   if (input.taxRate !== undefined) fields.taxRate = input.taxRate;
   if (input.dueDate !== undefined) fields.dueDate = input.dueDate;
   return fields;
@@ -67,6 +75,7 @@ export class InvoiceService {
         input.projectId,
       );
       const taxRate = input.taxRate ?? 0;
+      const { lines, amount } = calculateLineItems(input.lineItems);
       await manager.insert(Invoice, {
         id,
         ownerId,
@@ -76,9 +85,11 @@ export class InvoiceService {
         status: InvoiceStatus.Draft,
         currency: 'USD',
         ...toInvoiceFields(input),
+        amount,
         taxRate,
-        ...calculateInvoiceTotals({ amount: input.amount, taxRate }),
+        ...calculateInvoiceTotals({ amount, taxRate }),
       });
+      await this.insertLineItems(manager, id, lines);
     });
 
     return this.findOne(ownerId, id);
@@ -90,6 +101,7 @@ export class InvoiceService {
   ): Promise<InvoiceResponseDto[]> {
     const overdueOnly = query.overdue === 'true';
     const invoices = await this.invoices.find({
+      ...WITH_LINE_ITEMS,
       where: {
         ownerId,
         ...(query.projectId !== undefined && { projectId: query.projectId }),
@@ -100,14 +112,17 @@ export class InvoiceService {
           dueDate: LessThan(toDateOnly(new Date())),
         }),
       },
-      order: { createdAt: 'DESC' },
+      order: { createdAt: 'DESC', ...WITH_LINE_ITEMS.order },
     });
     const now = new Date();
     return invoices.map((invoice) => toInvoiceResponse(invoice, now));
   }
 
   async findOne(ownerId: string, id: string): Promise<InvoiceResponseDto> {
-    const invoice = await this.invoices.findOne({ where: { id, ownerId } });
+    const invoice = await this.invoices.findOne({
+      ...WITH_LINE_ITEMS,
+      where: { id, ownerId },
+    });
     if (!invoice) {
       throw new NotFoundException('Invoice not found');
     }
@@ -122,6 +137,12 @@ export class InvoiceService {
     await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockDraft(manager, ownerId, id);
       const fields = toInvoiceFields(input);
+      if (input.lineItems !== undefined) {
+        const { lines, amount } = calculateLineItems(input.lineItems);
+        await manager.delete(InvoiceLineItem, { invoiceId: id });
+        await this.insertLineItems(manager, id, lines);
+        fields.amount = amount;
+      }
       if (Object.keys(fields).length === 0) {
         return;
       }
@@ -206,6 +227,17 @@ export class InvoiceService {
       );
     });
     return this.findOne(ownerId, id);
+  }
+
+  private async insertLineItems(
+    manager: EntityManager,
+    invoiceId: string,
+    lines: (LineItemInput & { position: number; amount: number })[],
+  ): Promise<void> {
+    await manager.insert(
+      InvoiceLineItem,
+      lines.map((line) => ({ id: randomUUID(), invoiceId, ...line })),
+    );
   }
 
   private async lockBillableProject(

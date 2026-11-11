@@ -29,11 +29,11 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
   CreateInvoiceDto,
+  InvoiceResponseDto,
   ListInvoicesQueryDto,
   MarkInvoicePaidDto,
   UpdateInvoiceDto,
 } from './invoice.dto';
-import { InvoiceResponseDto } from './invoice.responses';
 import { InvoiceService } from './invoice.service';
 
 const DRAFT_ONLY = 'The invoice is not a draft';

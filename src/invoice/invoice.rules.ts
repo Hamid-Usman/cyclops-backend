@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   assertStorable,
   fromHundredths,
+  mulDivRound,
   percentOf,
   toHundredths,
 } from '../common/money';
@@ -37,6 +38,39 @@ export function calculateInvoiceTotals(input: {
     taxAmount: fromHundredths(taxAmount),
     total: fromHundredths(total),
   };
+}
+
+export interface LineItemInput {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+// Works out each line's amount (quantity × unit price, rounded half up to
+// cents) and their sum, which is the invoice amount before tax.
+export function calculateLineItems(items: readonly LineItemInput[]): {
+  lines: (LineItemInput & { position: number; amount: number })[];
+  amount: number;
+} {
+  let sum = 0n;
+  const lines = items.map((item, position) => {
+    const lineAmount = mulDivRound(
+      toHundredths(item.quantity),
+      toHundredths(item.unitPrice),
+      100n,
+    );
+    assertStorable(lineAmount, `amount of line ${position + 1}`);
+    sum += lineAmount;
+    return {
+      position,
+      description: item.description.trim(),
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      amount: fromHundredths(lineAmount),
+    };
+  });
+  assertStorable(sum, 'amount');
+  return { lines, amount: fromHundredths(sum) };
 }
 
 export function formatInvoiceNumber(number: number | null): string | null {

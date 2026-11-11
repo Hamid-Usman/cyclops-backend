@@ -2,7 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Project, ProjectStatus } from '../project/project.entity';
-import { Invoice, InvoiceStatus } from './invoice.entity';
+import { Invoice, InvoiceLineItem, InvoiceStatus } from './invoice.entity';
 import { InvoiceService } from './invoice.service';
 
 const OWNER_ID = 'owner-id';
@@ -83,7 +83,10 @@ describe('InvoiceService', () => {
       await service.create(OWNER_ID, {
         projectId: 'project-id',
         title: '  Deposit ',
-        amount: 967.5,
+        lineItems: [
+          { description: 'Design', quantity: 1, unitPrice: 645 },
+          { description: 'Build', quantity: 1.5, unitPrice: 215 },
+        ],
         taxRate: 7.5,
       });
 
@@ -104,6 +107,41 @@ describe('InvoiceService', () => {
       );
     });
 
+    it('saves the lines in order with their amounts', async () => {
+      await service.create(OWNER_ID, {
+        projectId: 'project-id',
+        title: 'Deposit',
+        lineItems: [
+          { description: ' Design ', quantity: 1, unitPrice: 645 },
+          { description: 'Build', quantity: 1.5, unitPrice: 215 },
+        ],
+      });
+
+      const [entity, rows] = manager.insert.mock.calls[1] as [
+        unknown,
+        Partial<InvoiceLineItem>[],
+      ];
+      expect(entity).toBe(InvoiceLineItem);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          position: 0,
+          description: 'Design',
+          quantity: 1,
+          unitPrice: 645,
+          amount: 645,
+        }),
+        expect.objectContaining({
+          position: 1,
+          description: 'Build',
+          quantity: 1.5,
+          unitPrice: 215,
+          amount: 322.5,
+        }),
+      ]);
+      const invoiceId = (manager.insert.mock.calls[0][1] as Invoice).id;
+      expect(rows.every((row) => row.invoiceId === invoiceId)).toBe(true);
+    });
+
     it('refuses projects that are not active or completed', async () => {
       for (const status of [ProjectStatus.Inactive, ProjectStatus.Cancelled]) {
         project = { ...project!, status };
@@ -111,7 +149,7 @@ describe('InvoiceService', () => {
           service.create(OWNER_ID, {
             projectId: 'project-id',
             title: 'Deposit',
-            amount: 100,
+            lineItems: [{ description: 'Work', quantity: 1, unitPrice: 100 }],
           }),
         ).rejects.toThrow('Invoices are only for active or completed projects');
       }
@@ -120,13 +158,32 @@ describe('InvoiceService', () => {
   });
 
   describe('update', () => {
-    it('recalculates totals when the amount changes', async () => {
-      await service.update(OWNER_ID, INVOICE_ID, { amount: 2000 });
+    it('replaces the lines and recalculates totals', async () => {
+      await service.update(OWNER_ID, INVOICE_ID, {
+        lineItems: [{ description: 'Build', quantity: 20, unitPrice: 100 }],
+      });
 
+      expect(manager.delete).toHaveBeenCalledWith(InvoiceLineItem, {
+        invoiceId: INVOICE_ID,
+      });
+      expect(manager.insert).toHaveBeenCalledWith(InvoiceLineItem, [
+        expect.objectContaining({ invoiceId: INVOICE_ID, amount: 2000 }),
+      ]);
       expect(manager.update).toHaveBeenCalledWith(
         Invoice,
         { id: INVOICE_ID },
         { amount: 2000, taxAmount: 200, total: 2200 },
+      );
+    });
+
+    it('leaves the lines alone when they are not sent', async () => {
+      await service.update(OWNER_ID, INVOICE_ID, { title: 'Changed' });
+
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.update).toHaveBeenCalledWith(
+        Invoice,
+        { id: INVOICE_ID },
+        { title: 'Changed' },
       );
     });
 

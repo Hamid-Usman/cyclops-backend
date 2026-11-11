@@ -3,6 +3,7 @@ import {
   addDays,
   assertInvoiceTransition,
   calculateInvoiceTotals,
+  calculateLineItems,
   formatInvoiceNumber,
   isOverdue,
   prepareInvoiceForSend,
@@ -41,6 +42,27 @@ describe('invoice rules', () => {
       taxAmount: 0,
       total: 100,
     });
+  });
+
+  it('works out line amounts and their sum', () => {
+    const { lines, amount } = calculateLineItems([
+      { description: ' Design ', quantity: 1, unitPrice: 645 },
+      { description: 'Build', quantity: 1.5, unitPrice: 215 },
+      // 0.33 × 10.05 = 3.3165, rounded half up
+      { description: 'Hosting', quantity: 0.33, unitPrice: 10.05 },
+    ]);
+    expect(lines.map((line) => line.amount)).toEqual([645, 322.5, 3.32]);
+    expect(lines.map((line) => line.position)).toEqual([0, 1, 2]);
+    expect(lines[0].description).toBe('Design');
+    expect(amount).toBe(970.82);
+  });
+
+  it('refuses lines whose total is too large to store', () => {
+    expect(() =>
+      calculateLineItems([
+        { description: 'Big', quantity: 2, unitPrice: 9_999_999_999.99 },
+      ]),
+    ).toThrow('The amount of line 1 cannot be more than');
   });
 
   it('formats invoice numbers', () => {

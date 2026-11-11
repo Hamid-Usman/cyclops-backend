@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { CACHE_MANAGER, type Cache } from '@nestjs/cache-manager';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { ClientStatus } from '../client/client.entity';
@@ -19,6 +20,10 @@ import {
 } from './dashboard.responses';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Dashboard numbers are cached per user for this long, so they can be up to
+// 30 seconds behind after a change.
+const CACHE_TTL_MS = 30_000;
 
 // Whole days from `today` to `dueDate`, both YYYY-MM-DD. Negative when past.
 function daysBetween(today: string, dueDate: string): number {
@@ -42,11 +47,35 @@ export class DashboardService {
     private readonly projects: Repository<Project>,
     @InjectRepository(Invoice)
     private readonly invoices: Repository<Invoice>,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) {}
 
   async getSummary(
     ownerId: string,
     now = new Date(),
+  ): Promise<DashboardResponseDto> {
+    return this.cache.wrap(
+      `dashboard:${ownerId}:${toDateOnly(now)}`,
+      () => this.loadSummary(ownerId, now),
+      CACHE_TTL_MS,
+    );
+  }
+
+  async getAttention(
+    ownerId: string,
+    days = DEFAULT_ATTENTION_DAYS,
+    now = new Date(),
+  ): Promise<AttentionResponseDto> {
+    return this.cache.wrap(
+      `attention:${ownerId}:${days}:${toDateOnly(now)}`,
+      () => this.loadAttention(ownerId, days, now),
+      CACHE_TTL_MS,
+    );
+  }
+
+  private async loadSummary(
+    ownerId: string,
+    now: Date,
   ): Promise<DashboardResponseDto> {
     const [activeClients, activeProjects, pendingInvoices] = await Promise.all([
       this.countActiveClients(ownerId),
@@ -59,10 +88,10 @@ export class DashboardService {
   }
 
   // Sent invoices and active projects that are overdue or due within `days`.
-  async getAttention(
+  private async loadAttention(
     ownerId: string,
-    days = DEFAULT_ATTENTION_DAYS,
-    now = new Date(),
+    days: number,
+    now: Date,
   ): Promise<AttentionResponseDto> {
     const today = toDateOnly(now);
     const horizon = LessThanOrEqual(addDays(today, days));
