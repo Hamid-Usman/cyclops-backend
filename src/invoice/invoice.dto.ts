@@ -136,6 +136,28 @@ export class UpdateInvoiceDto extends InvoiceFieldsDto {
   lineItems?: InvoiceLineItemInputDto[];
 }
 
+// Bills one step of a project's payment schedule.
+export class CreateInvoiceFromMilestoneDto {
+  @ApiProperty({
+    description: 'A project milestone (deposit, milestone or balance)',
+  })
+  @IsUUID()
+  milestoneId: string;
+}
+
+// The client's note that they paid an invoice.
+export class ReportPaymentDto {
+  @ApiPropertyOptional({
+    example: 'Bank transfer 2026-11-12, ref 88213',
+    maxLength: 200,
+    nullable: true,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reference?: string | null;
+}
+
 export class MarkInvoicePaidDto {
   @ApiPropertyOptional({
     type: Date,
@@ -258,6 +280,20 @@ export class InvoiceResponseDto {
   @ApiProperty({ type: Date, nullable: true })
   voidedAt: Date | null;
 
+  @ApiProperty({
+    type: Date,
+    nullable: true,
+    description: 'When the client reported paying it',
+  })
+  paymentReportedAt: Date | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: "The client's payment reference, e.g. a bank transfer id",
+  })
+  paymentReference: string | null;
+
   @ApiProperty()
   createdAt: Date;
 
@@ -296,6 +332,8 @@ export function toInvoiceResponse(
     sentAt: invoice.sentAt,
     paidAt: invoice.paidAt,
     voidedAt: invoice.voidedAt,
+    paymentReportedAt: invoice.paymentReportedAt ?? null,
+    paymentReference: invoice.paymentReference ?? null,
     createdAt: invoice.createdAt,
     updatedAt: invoice.updatedAt,
   };

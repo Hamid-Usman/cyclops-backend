@@ -7,9 +7,13 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, LessThan, Repository } from 'typeorm';
+import { DashboardCache } from '../cache/dashboard-cache.service';
+import { ProjectMilestone } from '../project/project-milestone.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
+import { Proposal, ProposalStatus } from '../proposal/proposal.entity';
 import {
   CreateInvoiceDto,
+  CreateInvoiceFromMilestoneDto,
   InvoiceResponseDto,
   ListInvoicesQueryDto,
   MarkInvoicePaidDto,
@@ -21,10 +25,15 @@ import {
   assertInvoiceTransition,
   calculateInvoiceTotals,
   calculateLineItems,
+  formatInvoiceNumber,
   LineItemInput,
   prepareInvoiceForSend,
   toDateOnly,
 } from './invoice.rules';
+import {
+  draftMilestoneInvoice,
+  nextInvoiceNumber,
+} from './milestone-invoicing';
 
 // Invoices are for agreed work only.
 const BILLABLE_STATUSES = [ProjectStatus.Active, ProjectStatus.Completed];
@@ -60,6 +69,7 @@ export class InvoiceService {
     @InjectRepository(Invoice)
     private readonly invoices: Repository<Invoice>,
     private readonly dataSource: DataSource,
+    private readonly dashboardCache: DashboardCache,
   ) {}
 
   async create(
@@ -91,6 +101,7 @@ export class InvoiceService {
       });
       await this.insertLineItems(manager, id, lines);
     });
+    await this.dashboardCache.invalidate(ownerId);
 
     return this.findOne(ownerId, id);
   }
@@ -157,6 +168,7 @@ export class InvoiceService {
       }
       await manager.update(Invoice, { id }, fields);
     });
+    await this.dashboardCache.invalidate(ownerId);
     return this.findOne(ownerId, id);
   }
 
@@ -165,27 +177,24 @@ export class InvoiceService {
       await this.lockDraft(manager, ownerId, id);
       await manager.delete(Invoice, { id });
     });
+    await this.dashboardCache.invalidate(ownerId);
   }
 
   async send(ownerId: string, id: string): Promise<InvoiceResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockOwned(manager, ownerId, id);
       const changes = prepareInvoiceForSend(invoice, new Date());
       await this.lockBillableProject(manager, ownerId, invoice.projectId);
 
-      // FOR UPDATE makes two sends by the same owner wait for each other, so
-      // they can't take the same number. The unique index is a backstop.
-      const [{ max }] = (await manager.query(
-        'SELECT MAX(`number`) AS `max` FROM `invoices` WHERE `owner_id` = ? FOR UPDATE',
-        [ownerId],
-      )) as [{ max: number | null }];
-
       await manager.update(
         Invoice,
         { id },
-        { ...changes, number: Number(max ?? 0) + 1 },
+        { ...changes, number: await nextInvoiceNumber(manager, ownerId) },
       );
+      return invoice.clientId;
     });
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
 
     // TODO: email the invoice to the client.
     return this.findOne(ownerId, id);
@@ -196,7 +205,7 @@ export class InvoiceService {
     id: string,
     input: MarkInvoicePaidDto,
   ): Promise<InvoiceResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockOwned(manager, ownerId, id);
       assertInvoiceTransition(invoice.status, InvoiceStatus.Paid);
 
@@ -212,12 +221,15 @@ export class InvoiceService {
         { id },
         { status: InvoiceStatus.Paid, paidAt },
       );
+      return invoice.clientId;
     });
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
     return this.findOne(ownerId, id);
   }
 
   async void(ownerId: string, id: string): Promise<InvoiceResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockOwned(manager, ownerId, id);
       assertInvoiceTransition(invoice.status, InvoiceStatus.Void);
       await manager.update(
@@ -225,7 +237,78 @@ export class InvoiceService {
         { id },
         { status: InvoiceStatus.Void, voidedAt: new Date() },
       );
+      return invoice.clientId;
     });
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
+    return this.findOne(ownerId, id);
+  }
+
+  /**
+   * Drafts the invoice for one step of a project's payment schedule, priced
+   * from the accepted proposal: that share of the agreed price after
+   * discount, with the agreed currency and tax rate. Each step is billed at
+   * most once; voiding its invoice frees it again.
+   */
+  async createFromMilestone(
+    ownerId: string,
+    input: CreateInvoiceFromMilestoneDto,
+  ): Promise<InvoiceResponseDto> {
+    let id = '';
+
+    await this.dataSource.transaction(async (manager) => {
+      const found = await manager.findOne(ProjectMilestone, {
+        where: { id: input.milestoneId },
+      });
+      if (!found) {
+        throw new NotFoundException('Milestone not found');
+      }
+      // Lock order is project, then milestone. This also checks ownership.
+      const project = await this.lockBillableProject(
+        manager,
+        ownerId,
+        found.projectId,
+      );
+      const milestone = await manager.findOneOrFail(ProjectMilestone, {
+        where: { id: found.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (milestone.invoiceId) {
+        const existing = await manager.findOne(Invoice, {
+          where: { id: milestone.invoiceId },
+        });
+        if (existing && existing.status !== InvoiceStatus.Void) {
+          throw new ConflictException(
+            `${milestone.title} is already billed on ${formatInvoiceNumber(existing.number) ?? 'a draft invoice'}`,
+          );
+        }
+      }
+
+      const proposal = await manager.findOne(Proposal, {
+        where: {
+          acceptedProjectId: project.id,
+          status: ProposalStatus.Accepted,
+        },
+      });
+      if (!proposal) {
+        throw new ConflictException(
+          'This project has no accepted proposal to bill from',
+        );
+      }
+
+      const schedule = await manager.find(ProjectMilestone, {
+        where: { projectId: project.id },
+        order: { position: 'ASC' },
+      });
+      id = await draftMilestoneInvoice(
+        manager,
+        { ownerId, project, proposal, schedule },
+        milestone,
+      );
+    });
+    await this.dashboardCache.invalidate(ownerId);
+
     return this.findOne(ownerId, id);
   }
 

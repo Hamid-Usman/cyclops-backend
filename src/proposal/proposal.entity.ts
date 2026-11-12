@@ -5,6 +5,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -12,6 +13,7 @@ import { User } from '../auth/user.entity';
 import { Client } from '../client/client.entity';
 import { moneyColumn, numberTransformer } from '../common/number.transformer';
 import { Project } from '../project/project.entity';
+import { ProposalMilestone } from './proposal-milestone.entity';
 
 export enum ProposalStatus {
   Draft = 'draft',
@@ -61,15 +63,21 @@ export class Proposal {
   })
   client: Client;
 
-  @Column({ name: 'project_id', type: 'char', length: 36 })
-  projectId: string;
+  // Null when the proposal is sent to a client without a project: accepting
+  // it creates the project.
+  @Column({ name: 'project_id', type: 'char', length: 36, nullable: true })
+  projectId: string | null;
 
-  @ManyToOne(() => Project)
+  @ManyToOne(() => Project, { nullable: true })
   @JoinColumn({
     name: 'project_id',
     foreignKeyConstraintName: 'FK_proposals_project_id',
   })
-  project: Project;
+  project: Project | null;
+
+  // The payment schedule, in order. Loaded only where needed.
+  @OneToMany(() => ProposalMilestone, (milestone) => milestone.proposal)
+  milestones?: ProposalMilestone[];
 
   @Column({ type: 'varchar', length: 200 })
   title: string;

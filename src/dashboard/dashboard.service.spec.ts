@@ -1,9 +1,10 @@
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Test } from '@nestjs/testing';
 import { LessThanOrEqual } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Invoice, InvoiceStatus } from '../invoice/invoice.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
+import { Proposal, ProposalStatus } from '../proposal/proposal.entity';
 import { DashboardService } from './dashboard.service';
 
 const OWNER_ID = 'owner-id';
@@ -32,6 +33,7 @@ describe('DashboardService', () => {
   let service: DashboardService;
   let clientsQuery: ReturnType<typeof makeQueryBuilder>;
   let invoicesQuery: ReturnType<typeof makeQueryBuilder>;
+  let proposalsQuery: ReturnType<typeof makeQueryBuilder>;
 
   const projects = {
     count: jest.fn(),
@@ -39,6 +41,7 @@ describe('DashboardService', () => {
     find: jest.fn(),
   };
   const invoices = { createQueryBuilder: jest.fn(), find: jest.fn() };
+  const proposals = { createQueryBuilder: jest.fn() };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -47,9 +50,12 @@ describe('DashboardService', () => {
         DashboardService,
         { provide: getRepositoryToken(Project), useValue: projects },
         { provide: getRepositoryToken(Invoice), useValue: invoices },
+        { provide: getRepositoryToken(Proposal), useValue: proposals },
         {
-          provide: CACHE_MANAGER,
-          useValue: { wrap: (_key: string, load: () => unknown) => load() },
+          provide: DashboardCache,
+          useValue: {
+            wrap: (_owner: string, _key: string, load: () => unknown) => load(),
+          },
         },
       ],
     }).compile();
@@ -62,6 +68,16 @@ describe('DashboardService', () => {
         { currency: 'USD', count: '2', overdue: '1', total: '1580.12' },
       ],
     });
+    proposalsQuery = makeQueryBuilder({
+      rows: [
+        { status: ProposalStatus.Draft, count: '2' },
+        { status: ProposalStatus.Sent, count: '1' },
+        { status: ProposalStatus.Viewed, count: '1' },
+        { status: ProposalStatus.Accepted, count: '1' },
+        { status: ProposalStatus.Declined, count: '1' },
+      ],
+    });
+    proposals.createQueryBuilder.mockReturnValue(proposalsQuery);
     projects.createQueryBuilder.mockReturnValue(clientsQuery);
     invoices.createQueryBuilder.mockReturnValue(invoicesQuery);
     projects.count.mockResolvedValue(2);
@@ -84,7 +100,12 @@ describe('DashboardService', () => {
           { currency: 'USD', amount: 1580.12 },
         ],
       },
+      proposals: { total: 6, drafts: 2, awaitingResponse: 2, accepted: 1 },
     });
+    expect(proposalsQuery.where).toHaveBeenCalledWith(
+      'proposal.ownerId = :ownerId',
+      { ownerId: OWNER_ID },
+    );
   });
 
   it('only counts your active projects', async () => {
@@ -114,11 +135,13 @@ describe('DashboardService', () => {
     clientsQuery.getRawOne.mockResolvedValue(undefined);
     invoicesQuery.getRawMany.mockResolvedValue([]);
     projects.count.mockResolvedValue(0);
+    proposalsQuery.getRawMany.mockResolvedValue([]);
 
     expect(await service.getSummary(OWNER_ID)).toEqual({
       activeClients: 0,
       activeProjects: 0,
       pendingInvoices: { count: 0, overdueCount: 0, totals: [] },
+      proposals: { total: 0, drafts: 0, awaitingResponse: 0, accepted: 0 },
     });
   });
 

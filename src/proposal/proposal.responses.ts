@@ -1,4 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { fromHundredths, toHundredths } from '../common/money';
+import { MilestoneKind } from '../project/project-milestone.entity';
+import {
+  buildProjectSchedule,
+  splitByPercent,
+} from '../project/milestone.rules';
 import { DurationUnit, Proposal, ProposalStatus } from './proposal.entity';
 import {
   ProposalSection,
@@ -15,12 +21,60 @@ const SECTIONS: ProposalSection[] = [
   'terms',
 ];
 
+export class ProposalMilestoneResponseDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty({ example: 'Design approved' })
+  title: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  deliverables: string | null;
+
+  @ApiProperty({ example: 25 })
+  percent: number;
+
+  @ApiProperty({ type: String, nullable: true, example: '2026-12-20' })
+  dueDate: string | null;
+}
+
+// One payment the client agrees to: the deposit, each milestone, or the
+// balance when there are no milestones.
+export class PaymentStepResponseDto {
+  @ApiProperty({ enum: MilestoneKind })
+  kind: MilestoneKind;
+
+  @ApiProperty({ example: 'Deposit' })
+  title: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  deliverables: string | null;
+
+  @ApiProperty({ example: 25 })
+  percent: number;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 483.75,
+    description: 'This share of the total, including tax',
+  })
+  amount: number | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  dueDate: string | null;
+}
+
 export class ProposalSummaryResponseDto {
   @ApiProperty()
   id: string;
 
-  @ApiProperty()
-  projectId: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Null until accepted when sent to a client without a project',
+  })
+  projectId: string | null;
 
   @ApiProperty()
   clientId: string;
@@ -132,6 +186,17 @@ export class ProposalResponseDto extends ProposalSummaryResponseDto {
 
   @ApiProperty({ type: String, nullable: true })
   declineReason: string | null;
+
+  @ApiProperty({ type: ProposalMilestoneResponseDto, isArray: true })
+  milestones: ProposalMilestoneResponseDto[];
+
+  @ApiProperty({
+    type: PaymentStepResponseDto,
+    isArray: true,
+    description:
+      'What the client will be billed, in order. Amounts are null while the total is unknown.',
+  })
+  paymentSchedule: PaymentStepResponseDto[];
 }
 
 export function toProposalSummary(
@@ -173,7 +238,48 @@ function totalsFor(proposal: Proposal): ProposalTotals | null {
   }
 }
 
+function milestonesOf(proposal: Proposal): ProposalMilestoneResponseDto[] {
+  return [...(proposal.milestones ?? [])]
+    .sort((a, b) => a.position - b.position)
+    .map((milestone) => ({
+      id: milestone.id,
+      title: milestone.title,
+      deliverables: milestone.deliverables,
+      percent: milestone.percent,
+      dueDate: milestone.dueDate,
+    }));
+}
+
+function paymentScheduleOf(
+  proposal: Proposal,
+  milestones: ProposalMilestoneResponseDto[],
+  totals: ProposalTotals | null,
+): PaymentStepResponseDto[] {
+  const steps = buildProjectSchedule({
+    depositPercent: proposal.depositPercent,
+    milestones,
+  });
+  // Only split when the percents add up to 100%; a draft may not yet.
+  const percentTotal = steps.reduce(
+    (sum, step) => sum + toHundredths(step.percent),
+    0n,
+  );
+  const amounts =
+    totals && percentTotal === 10_000n
+      ? splitByPercent(
+          toHundredths(totals.total),
+          steps.map((step) => step.percent),
+        )
+      : null;
+  return steps.map((step, index) => ({
+    ...step,
+    amount: amounts ? fromHundredths(amounts[index]) : null,
+  }));
+}
+
 export function toProposalResponse(proposal: Proposal): ProposalResponseDto {
+  const totals = totalsFor(proposal);
+  const milestones = milestonesOf(proposal);
   return {
     ...toProposalSummary(proposal),
     problemStatement: proposal.problemStatement,
@@ -185,7 +291,7 @@ export function toProposalResponse(proposal: Proposal): ProposalResponseDto {
     discount: proposal.discount,
     taxRate: proposal.taxRate,
     depositPercent: proposal.depositPercent,
-    totals: totalsFor(proposal),
+    totals,
     terms: proposal.terms,
     missingSections:
       proposal.status === ProposalStatus.Draft
@@ -195,5 +301,7 @@ export function toProposalResponse(proposal: Proposal): ProposalResponseDto {
     acceptedByName: proposal.acceptedByName,
     termsAcceptedAt: proposal.termsAcceptedAt,
     declineReason: proposal.declineReason,
+    milestones,
+    paymentSchedule: paymentScheduleOf(proposal, milestones, totals),
   };
 }

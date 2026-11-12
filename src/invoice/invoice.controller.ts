@@ -29,6 +29,7 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
   CreateInvoiceDto,
+  CreateInvoiceFromMilestoneDto,
   InvoiceResponseDto,
   ListInvoicesQueryDto,
   MarkInvoicePaidDto,
@@ -59,6 +60,25 @@ export class InvoiceController {
     @Body() input: CreateInvoiceDto,
   ) {
     return this.invoiceService.create(request.user.sub, input);
+  }
+
+  @Post('from-milestone')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Draft the invoice for a deposit or milestone',
+    description:
+      "Priced from the accepted proposal: the milestone's share of the agreed price after discount, with the agreed currency and tax. Review it, then send it as usual.",
+  })
+  @ApiCreatedResponse({ type: InvoiceResponseDto })
+  @ApiConflictResponse({
+    description:
+      'Already billed, the project is not active or completed, or it has no accepted proposal',
+  })
+  createFromMilestone(
+    @Req() request: AuthenticatedRequest,
+    @Body() input: CreateInvoiceFromMilestoneDto,
+  ) {
+    return this.invoiceService.createFromMilestone(request.user.sub, input);
   }
 
   @Get()

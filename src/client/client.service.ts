@@ -8,7 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { QueryFailedError, Repository } from 'typeorm';
 import { User } from '../auth/user.entity';
-import { CreateClientDto } from './client.dto';
+import { DashboardCache } from '../cache/dashboard-cache.service';
+import { CreateClientDto, UpdateClientDto } from './client.dto';
 import { Client, ClientStatus } from './client.entity';
 import { ClientResponseDto } from './client.responses';
 
@@ -31,7 +32,8 @@ export class ClientService {
     private readonly clients: Repository<Client>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
-  ) { }
+    private readonly dashboardCache: DashboardCache,
+  ) {}
 
   async create(input: CreateClientDto): Promise<ClientResponseDto> {
     const user = await this.findUser(input);
@@ -39,7 +41,7 @@ export class ClientService {
     const client = this.clients.create({
       id: randomUUID(),
       userId: user.id,
-      // status: input.status ?? ClientStatus.Active,
+      status: input.status ?? ClientStatus.Active,
     });
 
     try {
@@ -76,16 +78,25 @@ export class ClientService {
     return toClientResponse(client, client.user);
   }
 
-  // async findForUser(userId: string): Promise<ClientResponseDto> {
-  //   const client = await this.clients.findOne({
-  //     where: { userId },
-  //     relations: { user: true },
-  //   });
-  //   if (!client) {
-  //     throw new NotFoundException('Client not found');
-  //   }
-  //   return toClientResponse(client, client.user);
-  // }
+  async findForUser(userId: string): Promise<ClientResponseDto> {
+    const client = await this.clients.findOne({
+      where: { userId },
+      relations: { user: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
+    return toClientResponse(client, client.user);
+  }
+
+  async update(id: string, input: UpdateClientDto): Promise<ClientResponseDto> {
+    const result = await this.clients.update({ id }, { status: input.status });
+    if (!result.affected) {
+      throw new NotFoundException('Client not found');
+    }
+    await this.dashboardCache.invalidateClient(id);
+    return this.findOne(id);
+  }
 
   async remove(id: string): Promise<void> {
     const result = await this.clients.delete({ id });

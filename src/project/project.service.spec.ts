@@ -1,3 +1,5 @@
+import { ProjectMilestone } from './project-milestone.entity';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -25,6 +27,11 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 }
 
 describe('ProjectService', () => {
+  const milestones = {
+    find: jest.fn(),
+    update: jest.fn(),
+    findOneOrFail: jest.fn(),
+  };
   let service: ProjectService;
   const projects = { findOne: jest.fn(), find: jest.fn(), insert: jest.fn() };
   const clients = { findOne: jest.fn() };
@@ -42,7 +49,15 @@ describe('ProjectService', () => {
         ProjectService,
         { provide: getRepositoryToken(Project), useValue: projects },
         { provide: getRepositoryToken(Client), useValue: clients },
+        {
+          provide: getRepositoryToken(ProjectMilestone),
+          useValue: milestones,
+        },
         { provide: DataSource, useValue: dataSource },
+        {
+          provide: DashboardCache,
+          useValue: { invalidate: jest.fn(), invalidateClient: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(ProjectService);

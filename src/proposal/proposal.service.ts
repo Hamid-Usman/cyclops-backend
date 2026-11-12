@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -6,12 +7,17 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DashboardCache } from '../cache/dashboard-cache.service';
+import { Client } from '../client/client.entity';
+import { assertPaymentSchedule } from '../project/milestone.rules';
 import { Project, ProjectStatus } from '../project/project.entity';
 import {
   CreateProposalDto,
   ListProposalsQueryDto,
+  ProposalMilestoneInputDto,
   UpdateProposalDto,
 } from './proposal.dto';
+import { ProposalMilestone } from './proposal-milestone.entity';
 import { Proposal, ProposalStatus } from './proposal.entity';
 import {
   ProposalResponseDto,
@@ -54,12 +60,42 @@ function toProposalFields(
   return fields;
 }
 
+// Loads the payment schedule with a proposal, in order.
+const WITH_MILESTONES = {
+  relations: { milestones: true },
+  order: { milestones: { position: 'ASC' } },
+} as const;
+
+async function replaceMilestones(
+  manager: EntityManager,
+  proposalId: string,
+  milestones: ProposalMilestoneInputDto[],
+): Promise<void> {
+  await manager.delete(ProposalMilestone, { proposalId });
+  if (milestones.length === 0) {
+    return;
+  }
+  await manager.insert(
+    ProposalMilestone,
+    milestones.map((milestone, position) => ({
+      id: randomUUID(),
+      proposalId,
+      position,
+      title: milestone.title.trim(),
+      deliverables: trimOrNull(milestone.deliverables),
+      percent: milestone.percent,
+      dueDate: milestone.dueDate ?? null,
+    })),
+  );
+}
+
 @Injectable()
 export class ProposalService {
   constructor(
     @InjectRepository(Proposal)
     private readonly proposals: Repository<Proposal>,
     private readonly dataSource: DataSource,
+    private readonly dashboardCache: DashboardCache,
   ) {}
 
   async create(
@@ -68,25 +104,51 @@ export class ProposalService {
   ): Promise<ProposalResponseDto> {
     const id = randomUUID();
 
+    if (input.projectId !== undefined && input.clientId !== undefined) {
+      throw new BadRequestException(
+        'Send either projectId or clientId, not both',
+      );
+    }
+
     await this.dataSource.transaction(async (manager) => {
-      const project = await manager.findOne(Project, {
-        where: { id: input.projectId, ownerId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!project) {
-        throw new NotFoundException('Project not found');
-      }
-      if (project.status !== ProjectStatus.Inactive) {
-        throw new ConflictException(
-          'Proposals can only be made for inactive projects',
-        );
+      let clientId: string;
+      let projectId: string | null = null;
+      if (input.projectId !== undefined) {
+        const project = await manager.findOne(Project, {
+          where: { id: input.projectId, ownerId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!project) {
+          throw new NotFoundException('Project not found');
+        }
+        if (project.status !== ProjectStatus.Inactive) {
+          throw new ConflictException(
+            'Proposals can only be made for inactive projects',
+          );
+        }
+        clientId = project.clientId;
+        projectId = project.id;
+      } else {
+        // No project yet: accepting the proposal creates it.
+        const client = await manager.findOne(Client, {
+          where: { id: input.clientId },
+        });
+        if (!client) {
+          throw new NotFoundException('Client not found');
+        }
+        if (client.userId === ownerId) {
+          throw new BadRequestException(
+            'You cannot send a proposal to yourself',
+          );
+        }
+        clientId = client.id;
       }
 
       await manager.insert(Proposal, {
         id,
         ownerId,
-        clientId: project.clientId,
-        projectId: project.id,
+        clientId,
+        projectId,
         status: ProposalStatus.Draft,
         currency: 'USD',
         discount: 0,
@@ -94,7 +156,11 @@ export class ProposalService {
         depositPercent: 0,
         ...toProposalFields(input),
       });
+      if (input.milestones?.length) {
+        await replaceMilestones(manager, id, input.milestones);
+      }
     });
+    await this.dashboardCache.invalidate(ownerId);
 
     return this.findOne(ownerId, id);
   }
@@ -116,7 +182,10 @@ export class ProposalService {
   }
 
   async findOne(ownerId: string, id: string): Promise<ProposalResponseDto> {
-    const proposal = await this.proposals.findOne({ where: { id, ownerId } });
+    const proposal = await this.proposals.findOne({
+      ...WITH_MILESTONES,
+      where: { id, ownerId },
+    });
     if (!proposal) {
       throw new NotFoundException('Proposal not found');
     }
@@ -134,7 +203,11 @@ export class ProposalService {
       if (Object.keys(fields).length > 0) {
         await manager.update(Proposal, { id }, fields);
       }
+      if (input.milestones !== undefined) {
+        await replaceMilestones(manager, id, input.milestones);
+      }
     });
+    await this.dashboardCache.invalidate(ownerId);
     return this.findOne(ownerId, id);
   }
 
@@ -143,33 +216,43 @@ export class ProposalService {
       await this.lockDraft(manager, ownerId, id);
       await manager.delete(Proposal, { id });
     });
+    await this.dashboardCache.invalidate(ownerId);
   }
 
   async send(ownerId: string, id: string): Promise<ProposalResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       // Lock order is proposal, then project. Accepting a proposal must lock
       // in the same order so the two can't deadlock.
       const proposal = await this.lockOwned(manager, ownerId, id);
-      const project = await manager.findOne(Project, {
-        where: { id: proposal.projectId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (project?.status !== ProjectStatus.Inactive) {
-        throw new ConflictException(
-          'Proposals can only be sent for inactive projects',
-        );
+      if (proposal.projectId !== null) {
+        const project = await manager.findOne(Project, {
+          where: { id: proposal.projectId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (project?.status !== ProjectStatus.Inactive) {
+          throw new ConflictException(
+            'Proposals can only be sent for inactive projects',
+          );
+        }
       }
 
       const changes = prepareForSend(proposal, new Date());
+      const milestones = await manager.find(ProposalMilestone, {
+        where: { proposalId: id },
+      });
+      assertPaymentSchedule(proposal.depositPercent, milestones);
       await manager.update(Proposal, { id }, changes);
+      return proposal.clientId;
     });
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
 
     // TODO(step 5): email the client a link to the proposal.
     return this.findOne(ownerId, id);
   }
 
   async withdraw(ownerId: string, id: string): Promise<ProposalResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       const proposal = await this.lockOwned(manager, ownerId, id);
       assertProposalTransition(proposal.status, ProposalStatus.Withdrawn);
       await manager.update(
@@ -177,7 +260,10 @@ export class ProposalService {
         { id },
         { status: ProposalStatus.Withdrawn },
       );
+      return proposal.clientId;
     });
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
     return this.findOne(ownerId, id);
   }
 

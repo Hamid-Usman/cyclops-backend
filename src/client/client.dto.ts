@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
   IsEnum,
@@ -22,8 +22,14 @@ export class CreateClientDto {
   @IsUUID()
   userId?: string;
 
-  // @ApiPropertyOptional({ enum: ClientStatus, default: ClientStatus.Active })
-  // @IsOptional()
-  // @IsEnum(ClientStatus)
-  // status?: ClientStatus;
+  @ApiPropertyOptional({ enum: ClientStatus, default: ClientStatus.Active })
+  @IsOptional()
+  @IsEnum(ClientStatus)
+  status?: ClientStatus;
+}
+
+export class UpdateClientDto {
+  @ApiProperty({ enum: ClientStatus, example: ClientStatus.Inactive })
+  @IsEnum(ClientStatus)
+  status: ClientStatus;
 }

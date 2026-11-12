@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsNotEmpty,
   IsString,
   Matches,
   MaxLength,
@@ -45,4 +46,16 @@ export class LoginDto {
   @MinLength(8)
   @MaxLength(128)
   password: string;
+}
+
+export class GoogleTokenDto {
+  @ApiProperty({
+    description:
+      'Google ID token (the `credential` from Google Identity Services, or the `idToken` from a Google Sign-In SDK)',
+    maxLength: 4096,
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  idToken: string;
 }

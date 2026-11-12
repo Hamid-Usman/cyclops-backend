@@ -28,9 +28,13 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
   CreateProjectDto,
   ListProjectsQueryDto,
+  UpdateMilestoneDto,
   UpdateProjectDto,
 } from './project.dto';
-import { ProjectResponseDto } from './project.responses';
+import {
+  ProjectMilestoneResponseDto,
+  ProjectResponseDto,
+} from './project.responses';
 import { ProjectService } from './project.service';
 
 @Controller('projects')
@@ -90,5 +94,38 @@ export class ProjectController {
     @Body() input: UpdateProjectDto,
   ) {
     return this.projectService.update(request.user.sub, id, input);
+  }
+
+  @Get(':id/milestones')
+  @ApiOperation({
+    summary: 'The project payment schedule',
+    description:
+      'Generated from the accepted proposal: the deposit, each milestone (or the balance), with its amount and invoice.',
+  })
+  @ApiOkResponse({ type: ProjectMilestoneResponseDto, isArray: true })
+  @ApiNotFoundResponse({ description: 'Project not found' })
+  listMilestones(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.projectService.listMilestones(request.user.sub, id);
+  }
+
+  @Patch(':id/milestones/:milestoneId')
+  @ApiOperation({ summary: 'Mark a milestone delivered, or undo that' })
+  @ApiOkResponse({ type: ProjectMilestoneResponseDto })
+  @ApiNotFoundResponse({ description: 'Project or milestone not found' })
+  updateMilestone(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('milestoneId', ParseUUIDPipe) milestoneId: string,
+    @Body() input: UpdateMilestoneDto,
+  ) {
+    return this.projectService.updateMilestone(
+      request.user.sub,
+      id,
+      milestoneId,
+      input,
+    );
   }
 }

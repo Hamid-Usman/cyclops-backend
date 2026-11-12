@@ -4,6 +4,7 @@ import { QueryFailedError } from 'typeorm';
 import { User } from '../auth/user.entity';
 import { Client, ClientStatus } from './client.entity';
 import { ClientService } from './client.service';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 
 describe('ClientService', () => {
   let service: ClientService;
@@ -18,6 +19,7 @@ describe('ClientService', () => {
     find: jest.fn(),
     findOne: jest.fn(),
     delete: jest.fn(),
+    update: jest.fn(),
   };
   const users = { findOne: jest.fn() };
 
@@ -29,6 +31,10 @@ describe('ClientService', () => {
         ClientService,
         { provide: getRepositoryToken(Client), useValue: clients },
         { provide: getRepositoryToken(User), useValue: users },
+        {
+          provide: DashboardCache,
+          useValue: { invalidateClient: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(ClientService);
@@ -129,5 +135,48 @@ describe('ClientService', () => {
 
     clients.delete.mockResolvedValueOnce({ affected: 0 });
     await expect(service.remove('missing')).rejects.toThrow('Client not found');
+  });
+
+  it("finds the current user's client record", async () => {
+    clients.findOne.mockResolvedValueOnce({
+      id: 'c1',
+      status: ClientStatus.Active,
+      user,
+    });
+    await expect(service.findForUser(user.id)).resolves.toEqual({
+      id: 'c1',
+      status: ClientStatus.Active,
+      user,
+    });
+    expect(clients.findOne).toHaveBeenCalledWith({
+      where: { userId: user.id },
+      relations: { user: true },
+    });
+
+    clients.findOne.mockResolvedValueOnce(null);
+    await expect(service.findForUser('nobody')).rejects.toThrow(
+      'Client not found',
+    );
+  });
+
+  it("changes a client's status or throws not found", async () => {
+    clients.update.mockResolvedValueOnce({ affected: 1 });
+    clients.findOne.mockResolvedValueOnce({
+      id: 'c1',
+      status: ClientStatus.Archived,
+      user,
+    });
+    await expect(
+      service.update('c1', { status: ClientStatus.Archived }),
+    ).resolves.toEqual({ id: 'c1', status: ClientStatus.Archived, user });
+    expect(clients.update).toHaveBeenCalledWith(
+      { id: 'c1' },
+      { status: ClientStatus.Archived },
+    );
+
+    clients.update.mockResolvedValueOnce({ affected: 0 });
+    await expect(
+      service.update('missing', { status: ClientStatus.Active }),
+    ).rejects.toThrow('Client not found');
   });
 });

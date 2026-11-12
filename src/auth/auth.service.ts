@@ -15,6 +15,7 @@ import {
 import { Repository, QueryFailedError } from 'typeorm';
 import { LoginDto, RegisterDto } from './auth.dto';
 import { PublicUser } from './auth.types';
+import { GoogleTokenVerifier } from './google-token.verifier';
 import { User } from './user.entity';
 
 const TOKEN_EXPIRY_SECONDS = 60 * 60;
@@ -32,6 +33,19 @@ function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
+function isDuplicateKey(error: unknown, constraint: string): boolean {
+  return (
+    error instanceof QueryFailedError &&
+    error.driverError.code === 'ER_DUP_ENTRY' &&
+    String(error.driverError.message).includes(constraint)
+  );
+}
+
+function googleDisplayName(name: string | undefined, email: string): string {
+  const displayName = (name?.trim() || email.split('@')[0]).slice(0, 80);
+  return displayName || 'Google user';
+}
+
 function toPublicUser(user: User): PublicUser {
   return {
     id: user.id,
@@ -46,6 +60,7 @@ export class AuthService {
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly jwtService: JwtService,
+    private readonly googleTokens: GoogleTokenVerifier,
   ) {}
 
   async register(input: RegisterDto) {
@@ -65,11 +80,7 @@ export class AuthService {
     try {
       await this.users.save(user);
     } catch (error) {
-      if (
-        error instanceof QueryFailedError &&
-        error.driverError.code === 'ER_DUP_ENTRY' &&
-        error.driverError.message.includes('UQ_users_email')
-      ) {
+      if (isDuplicateKey(error, 'UQ_users_email')) {
         throw new ConflictException(
           'An account with this email already exists',
         );
@@ -96,6 +107,105 @@ export class AuthService {
     }
 
     return this.createAuthResponse(user);
+  }
+
+  /**
+   * Signs in with a Google ID token, creating the account on first sign-in.
+   * An existing password account is never taken over by email: its owner
+   * signs in with the password and links Google from there (`linkGoogle`),
+   * since nothing proves they own the address they registered with.
+   */
+  async signInWithGoogle(idToken: string) {
+    const profile = await this.googleTokens.verify(idToken);
+
+    const linked = await this.users.findOne({
+      where: { googleSubject: profile.subject },
+    });
+    if (linked) {
+      return this.createAuthResponse(linked);
+    }
+
+    if (!profile.email || !profile.emailVerified) {
+      throw new UnauthorizedException(
+        'Your Google account has no verified email address',
+      );
+    }
+    const email = profile.email.trim().toLowerCase();
+    if (await this.users.findOne({ where: { email } })) {
+      throw new ConflictException(
+        'An account with this email already exists. Log in with your password, then link your Google account.',
+      );
+    }
+
+    const user = this.users.create({
+      id: randomUUID(),
+      email,
+      displayName: googleDisplayName(profile.name, email),
+      passwordHash: null,
+      googleSubject: profile.subject,
+    });
+
+    try {
+      await this.users.save(user);
+    } catch (error) {
+      // A concurrent first sign-in with the same Google account won the race.
+      if (isDuplicateKey(error, 'UQ_users_google_subject')) {
+        const winner = await this.users.findOne({
+          where: { googleSubject: profile.subject },
+        });
+        if (winner) {
+          return this.createAuthResponse(winner);
+        }
+      }
+      if (isDuplicateKey(error, 'UQ_users_email')) {
+        throw new ConflictException(
+          'An account with this email already exists. Log in with your password, then link your Google account.',
+        );
+      }
+      throw error;
+    }
+
+    return this.createAuthResponse(user);
+  }
+
+  /** Links a Google account to the signed-in user, so they can sign in with either. */
+  async linkGoogle(userId: string, idToken: string): Promise<PublicUser> {
+    const profile = await this.googleTokens.verify(idToken);
+
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (user.googleSubject === profile.subject) {
+      return toPublicUser(user);
+    }
+    if (user.googleSubject) {
+      throw new ConflictException(
+        'This account is already linked to a different Google account',
+      );
+    }
+
+    const owner = await this.users.findOne({
+      where: { googleSubject: profile.subject },
+    });
+    if (owner) {
+      throw new ConflictException(
+        'This Google account is already linked to another account',
+      );
+    }
+
+    user.googleSubject = profile.subject;
+    try {
+      await this.users.save(user);
+    } catch (error) {
+      if (isDuplicateKey(error, 'UQ_users_google_subject')) {
+        throw new ConflictException(
+          'This Google account is already linked to another account',
+        );
+      }
+      throw error;
+    }
+    return toPublicUser(user);
   }
 
   async findPublicUser(id: string): Promise<PublicUser> {

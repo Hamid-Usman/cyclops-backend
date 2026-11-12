@@ -7,7 +7,11 @@ import { Invoice, InvoiceLineItem } from './invoice.entity';
 import { InvoiceService } from './invoice.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Invoice, InvoiceLineItem]), ProjectModule, AuthModule],
+  imports: [
+    TypeOrmModule.forFeature([Invoice, InvoiceLineItem]),
+    ProjectModule,
+    AuthModule,
+  ],
   controllers: [InvoiceController],
   providers: [InvoiceService],
 })

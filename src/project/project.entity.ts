@@ -52,6 +52,10 @@ export class Project {
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
+  // Copied from the accepted proposal.
+  @Column({ type: 'text', nullable: true })
+  deliverables: string | null;
+
   // Stays inactive until the client accepts a proposal for this project.
   @Column({
     type: 'enum',

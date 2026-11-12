@@ -6,14 +6,22 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Client } from '../client/client.entity';
 import {
   CreateProjectDto,
   ListProjectsQueryDto,
+  UpdateMilestoneDto,
   UpdateProjectDto,
 } from './project.dto';
+import { ProjectMilestone } from './project-milestone.entity';
 import { Project, ProjectStatus } from './project.entity';
-import { ProjectResponseDto, toProjectResponse } from './project.responses';
+import {
+  ProjectMilestoneResponseDto,
+  ProjectResponseDto,
+  toMilestoneResponse,
+  toProjectResponse,
+} from './project.responses';
 import { assertOwnerProjectTransition } from './project.rules';
 
 function assertDateOrder(
@@ -40,7 +48,10 @@ export class ProjectService {
     private readonly projects: Repository<Project>,
     @InjectRepository(Client)
     private readonly clients: Repository<Client>,
+    @InjectRepository(ProjectMilestone)
+    private readonly milestones: Repository<ProjectMilestone>,
     private readonly dataSource: DataSource,
+    private readonly dashboardCache: DashboardCache,
   ) {}
 
   async create(
@@ -76,6 +87,8 @@ export class ProjectService {
       activatedAt: null,
     });
 
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(client.id);
     return this.findOne(ownerId, id);
   }
 
@@ -107,7 +120,7 @@ export class ProjectService {
     id: string,
     input: UpdateProjectDto,
   ): Promise<ProjectResponseDto> {
-    await this.dataSource.transaction(async (manager) => {
+    const clientId = await this.dataSource.transaction(async (manager) => {
       // Locked so a status change can't race with a client accepting a
       // proposal for this project.
       const project = await manager.findOne(Project, {
@@ -144,8 +157,47 @@ export class ProjectService {
       if (Object.keys(changes).length > 0) {
         await manager.update(Project, { id }, changes);
       }
+      return project.clientId;
     });
 
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(clientId);
     return this.findOne(ownerId, id);
+  }
+
+  /** The project's billable steps, generated when its proposal was accepted. */
+  async listMilestones(
+    ownerId: string,
+    projectId: string,
+  ): Promise<ProjectMilestoneResponseDto[]> {
+    await this.findOne(ownerId, projectId);
+    const milestones = await this.milestones.find({
+      where: { projectId },
+      relations: { invoice: true },
+      order: { position: 'ASC' },
+    });
+    return milestones.map((milestone) => toMilestoneResponse(milestone));
+  }
+
+  async updateMilestone(
+    ownerId: string,
+    projectId: string,
+    milestoneId: string,
+    input: UpdateMilestoneDto,
+  ): Promise<ProjectMilestoneResponseDto> {
+    const project = await this.findOne(ownerId, projectId);
+    const result = await this.milestones.update(
+      { id: milestoneId, projectId },
+      { completedAt: input.completed ? new Date() : null },
+    );
+    if (!result.affected) {
+      throw new NotFoundException('Milestone not found');
+    }
+    await this.dashboardCache.invalidateClient(project.clientId);
+    const milestone = await this.milestones.findOneOrFail({
+      where: { id: milestoneId },
+      relations: { invoice: true },
+    });
+    return toMilestoneResponse(milestone);
   }
 }

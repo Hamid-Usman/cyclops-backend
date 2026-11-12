@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
   IsDate,
   IsEnum,
   IsInt,
@@ -11,6 +14,8 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 import {
   IsAmount,
@@ -20,6 +25,39 @@ import {
   IsPercent,
 } from '../common/validation';
 import { DurationUnit, ProposalStatus } from './proposal.entity';
+
+export const MAX_MILESTONES = 20;
+
+// One step of the payment schedule.
+export class ProposalMilestoneInputDto {
+  @ApiProperty({ example: 'Design approved', maxLength: 200 })
+  @IsString()
+  @IsNotBlank()
+  @MaxLength(200)
+  title: string;
+
+  @ApiPropertyOptional({
+    example: 'Wireframes and visual design for all pages',
+    nullable: true,
+    maxLength: 5000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  deliverables?: string | null;
+
+  @ApiProperty({
+    example: 25,
+    description: 'Share of the total, up to two decimals',
+  })
+  @IsPercent()
+  percent: number;
+
+  @ApiPropertyOptional({ example: '2026-12-20', nullable: true })
+  @IsOptional()
+  @IsDateOnly()
+  dueDate?: string | null;
+}
 
 // Fields shared by create and edit. Anything can be left empty on a draft;
 // all five sections are checked when the proposal is sent.
@@ -126,12 +164,36 @@ class ProposalFieldsDto {
   @Type(() => Date)
   @IsDate()
   validUntil?: Date | null;
+
+  @ApiPropertyOptional({
+    type: [ProposalMilestoneInputDto],
+    description: `Payment schedule, up to ${MAX_MILESTONES} milestones. With milestones, the deposit plus all milestones must add up to 100% when sent. Without, the rest after the deposit is billed as one balance. Sending a list replaces the old one.`,
+  })
+  @IsOptionalNotNull()
+  @IsArray()
+  @ArrayMaxSize(MAX_MILESTONES)
+  @ValidateNested({ each: true })
+  @Type(() => ProposalMilestoneInputDto)
+  milestones?: ProposalMilestoneInputDto[];
 }
 
+// Either for an existing inactive project, or for a client: then accepting
+// the proposal creates the project.
 export class CreateProposalDto extends ProposalFieldsDto {
-  @ApiProperty({ description: 'The inactive project this proposal is for' })
+  @ApiPropertyOptional({
+    description: 'An inactive project this proposal is for',
+  })
+  @ValidateIf((dto: CreateProposalDto) => dto.clientId === undefined)
   @IsUUID()
-  projectId: string;
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The client, when there is no project yet. Accepting creates the project.',
+  })
+  @ValidateIf((dto: CreateProposalDto) => dto.projectId === undefined)
+  @IsUUID()
+  clientId?: string;
 
   @ApiProperty({ example: 'Checkout redesign proposal', maxLength: 200 })
   @IsString()
@@ -164,4 +226,32 @@ export class ListProposalsQueryDto {
   @IsOptional()
   @IsEnum(ProposalStatus)
   status?: ProposalStatus;
+}
+
+// The client's answer to a sent proposal.
+export class AcceptProposalDto {
+  @ApiProperty({
+    example: true,
+    description: 'Must be true: the client agrees to the proposal terms',
+  })
+  @IsBoolean()
+  agreeToTerms: boolean;
+
+  @ApiProperty({
+    example: 'Jane Client',
+    maxLength: 120,
+    description: 'Typed signature: the full name of the person accepting',
+  })
+  @IsString()
+  @IsNotBlank()
+  @MaxLength(120)
+  signatureName: string;
+}
+
+export class DeclineProposalDto {
+  @ApiPropertyOptional({ nullable: true, maxLength: 5000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  reason?: string | null;
 }

@@ -1,3 +1,4 @@
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -61,6 +62,10 @@ describe('InvoiceService', () => {
         InvoiceService,
         { provide: getRepositoryToken(Invoice), useValue: invoices },
         { provide: DataSource, useValue: dataSource },
+        {
+          provide: DashboardCache,
+          useValue: { invalidate: jest.fn(), invalidateClient: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(InvoiceService);

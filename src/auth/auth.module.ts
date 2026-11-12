@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { GoogleTokenVerifier } from './google-token.verifier';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { User } from './user.entity';
 
@@ -25,7 +26,7 @@ import { User } from './user.entity';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard],
+  providers: [AuthService, JwtAuthGuard, GoogleTokenVerifier],
   exports: [JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

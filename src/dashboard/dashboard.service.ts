@@ -1,7 +1,7 @@
-import { CACHE_MANAGER, type Cache } from '@nestjs/cache-manager';
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { ClientStatus } from '../client/client.entity';
 import { Invoice, InvoiceStatus } from '../invoice/invoice.entity';
 import {
@@ -10,6 +10,7 @@ import {
   toDateOnly,
 } from '../invoice/invoice.rules';
 import { Project, ProjectStatus } from '../project/project.entity';
+import { Proposal, ProposalStatus } from '../proposal/proposal.entity';
 import { DEFAULT_ATTENTION_DAYS } from './dashboard.dto';
 import {
   AttentionInvoiceDto,
@@ -17,12 +18,13 @@ import {
   AttentionResponseDto,
   DashboardResponseDto,
   PendingInvoicesDto,
+  ProposalCountsDto,
 } from './dashboard.responses';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Dashboard numbers are cached per user for this long, so they can be up to
-// 30 seconds behind after a change.
+// Dashboard numbers are cached per user for this long. Writes to projects,
+// proposals and invoices clear the owner's cache (see DashboardCache).
 const CACHE_TTL_MS = 30_000;
 
 // Whole days from `today` to `dueDate`, both YYYY-MM-DD. Negative when past.
@@ -47,7 +49,9 @@ export class DashboardService {
     private readonly projects: Repository<Project>,
     @InjectRepository(Invoice)
     private readonly invoices: Repository<Invoice>,
-    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+    @InjectRepository(Proposal)
+    private readonly proposals: Repository<Proposal>,
+    private readonly cache: DashboardCache,
   ) {}
 
   async getSummary(
@@ -55,7 +59,8 @@ export class DashboardService {
     now = new Date(),
   ): Promise<DashboardResponseDto> {
     return this.cache.wrap(
-      `dashboard:${ownerId}:${toDateOnly(now)}`,
+      ownerId,
+      `summary:${toDateOnly(now)}`,
       () => this.loadSummary(ownerId, now),
       CACHE_TTL_MS,
     );
@@ -67,7 +72,8 @@ export class DashboardService {
     now = new Date(),
   ): Promise<AttentionResponseDto> {
     return this.cache.wrap(
-      `attention:${ownerId}:${days}:${toDateOnly(now)}`,
+      ownerId,
+      `attention:${days}:${toDateOnly(now)}`,
       () => this.loadAttention(ownerId, days, now),
       CACHE_TTL_MS,
     );
@@ -77,14 +83,16 @@ export class DashboardService {
     ownerId: string,
     now: Date,
   ): Promise<DashboardResponseDto> {
-    const [activeClients, activeProjects, pendingInvoices] = await Promise.all([
-      this.countActiveClients(ownerId),
-      this.projects.count({
-        where: { ownerId, status: ProjectStatus.Active },
-      }),
-      this.summarizePendingInvoices(ownerId, toDateOnly(now)),
-    ]);
-    return { activeClients, activeProjects, pendingInvoices };
+    const [activeClients, activeProjects, pendingInvoices, proposals] =
+      await Promise.all([
+        this.countActiveClients(ownerId),
+        this.projects.count({
+          where: { ownerId, status: ProjectStatus.Active },
+        }),
+        this.summarizePendingInvoices(ownerId, toDateOnly(now)),
+        this.countProposals(ownerId),
+      ]);
+    return { activeClients, activeProjects, pendingInvoices, proposals };
   }
 
   // Sent invoices and active projects that are overdue or due within `days`.
@@ -155,6 +163,26 @@ export class DashboardService {
       .andWhere('client.status = :status', { status: ClientStatus.Active })
       .getRawOne<{ count: string | number }>();
     return Number((row && row.count) || 0);
+  }
+
+  private async countProposals(ownerId: string): Promise<ProposalCountsDto> {
+    const rows = await this.proposals
+      .createQueryBuilder('proposal')
+      .select('proposal.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('proposal.ownerId = :ownerId', { ownerId })
+      .groupBy('proposal.status')
+      .getRawMany<{ status: ProposalStatus; count: string | number }>();
+    const count = (...statuses: ProposalStatus[]) =>
+      rows
+        .filter((row) => statuses.includes(row.status))
+        .reduce((sum, row) => sum + Number(row.count), 0);
+    return {
+      total: count(...Object.values(ProposalStatus)),
+      drafts: count(ProposalStatus.Draft),
+      awaitingResponse: count(ProposalStatus.Sent, ProposalStatus.Viewed),
+      accepted: count(ProposalStatus.Accepted),
+    };
   }
 
   private async summarizePendingInvoices(

@@ -1,10 +1,13 @@
 import { createKeyv } from '@keyv/redis';
 import { CacheModule, type CacheOptions } from '@nestjs/cache-manager';
-import { Logger, Module } from '@nestjs/common';
+import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DashboardCache } from './dashboard-cache.service';
 
 // Makes the cache (CACHE_MANAGER) available app-wide, stored in Redis at
 // REDIS_URL. Without REDIS_URL it falls back to an in-memory cache.
+// DashboardCache is available app-wide too.
+@Global()
 @Module({
   imports: [
     CacheModule.registerAsync({
@@ -40,5 +43,7 @@ import { ConfigService } from '@nestjs/config';
       },
     }),
   ],
+  providers: [DashboardCache],
+  exports: [DashboardCache],
 })
 export class RedisCacheModule {}

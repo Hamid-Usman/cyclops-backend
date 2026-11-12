@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsEnum,
   IsOptional,
   IsString,
@@ -86,4 +87,13 @@ export class ListProjectsQueryDto {
   @IsOptional()
   @IsUUID()
   clientId?: string;
+}
+
+export class UpdateMilestoneDto {
+  @ApiProperty({
+    example: true,
+    description: 'Mark the milestone delivered, or undo that',
+  })
+  @IsBoolean()
+  completed: boolean;
 }

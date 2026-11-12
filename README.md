@@ -75,6 +75,79 @@ Register and login return an `accessToken`, `tokenType`, `expiresIn`, and the
 public user profile. Email addresses are case-insensitive, and duplicate
 registrations return `409 Conflict`.
 
+### Google sign-in
+
+The frontend signs the user in with Google and sends the resulting Google ID
+token to the API, which verifies it against Google's published keys and returns
+the same response as `/auth/login`.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials),
+   create an OAuth client ID of type "Web application" and add your frontend's
+   origins (e.g. `http://localhost:5173`) as authorized JavaScript origins.
+2. Set `GOOGLE_CLIENT_ID` in `.env` to that client id. For several clients
+   (web, iOS, Android), separate their ids with commas. No client secret is
+   needed. Without it, the Google endpoints answer `503`.
+3. On the frontend, use [Google Identity Services](https://developers.google.com/identity/gsi/web)
+   (web) or the Google Sign-In SDK (mobile) and post its ID token (`credential`).
+
+Endpoints:
+
+- `POST /auth/google` with `{ "idToken": "<Google ID token>" }` signs in, and
+  creates the account on first sign-in (with no password).
+- `POST /auth/google/link` with `{ "idToken": "..." }` and
+  `Authorization: Bearer <accessToken>` links Google to an existing account.
+
+Accounts are matched by Google's account id, never by email. If a password
+account already uses the Google email, `/auth/google` answers `409`: the user
+logs in with their password and links Google instead. This stops someone who
+registered another person's email from taking over their Google sign-in.
+
+## Workflow API
+
+Every endpoint below needs `Authorization: Bearer <accessToken>`.
+
+- **Clients** (`/client`): add an existing user as a client by `email` or
+  `userId` (optional `status`: `lead`, `active`, `inactive`, `archived`), list,
+  get, `PATCH /client/:id` with `{ "status": ... }`, delete.
+  `GET /client/me` returns the signed-in user's own client record.
+- **Projects** (`/projects`): create for a client, list (filter by `status`,
+  `clientId`), get, edit, complete or cancel. New projects are inactive; a
+  project becomes active only when its client accepts a proposal.
+- **Proposals** (`/proposals`): the owner drafts a proposal for a client
+  (`clientId`; the project is created when the client accepts) or for an
+  existing inactive project (`projectId`), edits it, then
+  `POST /proposals/:id/send` (all five sections must be filled in; totals and
+  terms are locked) or `/withdraw`. An optional payment schedule,
+  `milestones: [{ title, deliverables?, percent, dueDate? }]`, must add up to
+  100% together with `depositPercent` when sent; without milestones, whatever
+  the deposit leaves is billed as one balance. Responses include the
+  `paymentSchedule` with each step's amount.
+- **Generated projects**: accepting a proposal creates the project (name,
+  description, deliverables, start date, due date from the last milestone or
+  the estimated duration) and its milestones: the deposit, each milestone or
+  the balance, priced so they add up exactly to the agreed total.
+  `GET /projects/:id/milestones` lists them with their invoice, and
+  `PATCH /projects/:id/milestones/:milestoneId` with `{ "completed": true }`
+  marks one delivered.
+- **Received proposals** (`/received-proposals`): the client's side. List the
+  proposals sent to you, open one (marks it viewed), then
+  `POST /received-proposals/:id/accept` with
+  `{ "agreeToTerms": true, "signatureName": "Full Name" }` or
+  `/decline` with an optional `{ "reason": "..." }`. Accepting activates the
+  project and supersedes its other open proposals. Proposals past
+  `validUntil` become expired.
+- **Invoices** (`/invoices`): draft with line items for an active or completed
+  project, edit, `send` (numbered `INV-0001`, ...; due in 14 days unless a due
+  date is set), `mark-paid`, `void`. `GET /invoices?overdue=true` lists overdue
+  ones. `POST /invoices/from-milestone` with `{ "milestoneId": "..." }` drafts
+  the deposit or milestone invoice from the agreed terms (that share of the
+  price after discount, with the agreed currency and tax rate). A milestone is
+  billed once; voiding its invoice frees it again.
+- **Dashboard** (`/dashboard`, `/dashboard/attention?days=14`): active
+  clients, active projects, pending invoice totals per currency, and what is
+  overdue or due soon. Cached per user for 30 seconds (Redis at `REDIS_URL`, or
+  in memory without it).
+
 Interactive API documentation is available at `/api/docs` when the app is
 running. The generated OpenAPI JSON is available at `/api/docs-json`.
 

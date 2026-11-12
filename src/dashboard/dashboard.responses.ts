@@ -23,6 +23,20 @@ export class PendingInvoicesDto {
   totals: CurrencyTotalDto[];
 }
 
+export class ProposalCountsDto {
+  @ApiProperty({ example: 6, description: 'All your proposals' })
+  total: number;
+
+  @ApiProperty({ example: 2 })
+  drafts: number;
+
+  @ApiProperty({ example: 3, description: 'Sent or viewed, not answered' })
+  awaitingResponse: number;
+
+  @ApiProperty({ example: 1 })
+  accepted: number;
+}
+
 export class DashboardResponseDto {
   @ApiProperty({
     example: 4,
@@ -35,6 +49,9 @@ export class DashboardResponseDto {
 
   @ApiProperty({ type: PendingInvoicesDto })
   pendingInvoices: PendingInvoicesDto;
+
+  @ApiProperty({ type: ProposalCountsDto })
+  proposals: ProposalCountsDto;
 }
 
 export class AttentionInvoiceDto {

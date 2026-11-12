@@ -15,6 +15,14 @@ async function bootstrap() {
     }),
   );
 
+  // Browser frontends allowed to call the API, comma-separated.
+  app.enableCors({
+    origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3001')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  });
+
   setupSwagger(app);
   await app.listen(process.env.PORT ?? 3000);
 }

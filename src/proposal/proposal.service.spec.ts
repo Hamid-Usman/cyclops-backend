@@ -1,3 +1,6 @@
+import { Client } from '../client/client.entity';
+import { ProposalMilestone } from './proposal-milestone.entity';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { BadRequestException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -57,6 +60,7 @@ describe('ProposalService', () => {
   const proposals = { findOne: jest.fn(), find: jest.fn() };
   const manager = {
     findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     insert: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
@@ -75,6 +79,10 @@ describe('ProposalService', () => {
         ProposalService,
         { provide: getRepositoryToken(Proposal), useValue: proposals },
         { provide: DataSource, useValue: dataSource },
+        {
+          provide: DashboardCache,
+          useValue: { invalidate: jest.fn(), invalidateClient: jest.fn() },
+        },
       ],
     }).compile();
     service = module.get(ProposalService);
@@ -118,6 +126,47 @@ describe('ProposalService', () => {
         service.create(OWNER_ID, { projectId: 'project-id', title: 'New' }),
       ).rejects.toThrow('Proposals can only be made for inactive projects');
       expect(manager.insert).not.toHaveBeenCalled();
+    });
+
+    it('can be made for a client with no project yet, with a payment schedule', async () => {
+      manager.findOne.mockImplementation((entity: unknown) =>
+        Promise.resolve(
+          entity === Client
+            ? { id: 'client-id', userId: 'someone-else' }
+            : null,
+        ),
+      );
+
+      await service.create(OWNER_ID, {
+        clientId: 'client-id',
+        title: 'Website',
+        depositPercent: 20,
+        milestones: [
+          { title: ' Design ', percent: 30 },
+          { title: 'Build', percent: 50, dueDate: '2026-12-20' },
+        ],
+      });
+
+      expect(manager.insert).toHaveBeenCalledWith(
+        Proposal,
+        expect.objectContaining({ clientId: 'client-id', projectId: null }),
+      );
+      expect(manager.insert).toHaveBeenCalledWith(ProposalMilestone, [
+        expect.objectContaining({ position: 0, title: 'Design', percent: 30 }),
+        expect.objectContaining({
+          position: 1,
+          title: 'Build',
+          percent: 50,
+          dueDate: '2026-12-20',
+        }),
+      ]);
+    });
+
+    it('refuses to send a proposal to yourself', async () => {
+      manager.findOne.mockResolvedValue({ id: 'client-id', userId: OWNER_ID });
+      await expect(
+        service.create(OWNER_ID, { clientId: 'client-id', title: 'Me' }),
+      ).rejects.toThrow('You cannot send a proposal to yourself');
     });
   });
 
@@ -176,6 +225,26 @@ describe('ProposalService', () => {
         }),
       );
       expect(manager.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a payment schedule that does not add up to 100%', async () => {
+      manager.find.mockResolvedValueOnce([{ percent: 40 }]);
+      proposal = makeProposal({ depositPercent: 20 });
+
+      await expect(service.send(OWNER_ID, PROPOSAL_ID)).rejects.toThrow(
+        'The deposit and milestones must add up to 100% (they add up to 60%)',
+      );
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+
+    it('sends a proposal that has no project yet', async () => {
+      proposal = makeProposal({ projectId: null });
+      await service.send(OWNER_ID, PROPOSAL_ID);
+      expect(manager.update).toHaveBeenCalledWith(
+        Proposal,
+        { id: PROPOSAL_ID },
+        expect.objectContaining({ status: ProposalStatus.Sent }),
+      );
     });
 
     it('refuses when the project was cancelled', async () => {

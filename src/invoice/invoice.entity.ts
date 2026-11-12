@@ -126,6 +126,18 @@ export class Invoice {
   @Column({ name: 'voided_at', type: 'datetime', nullable: true })
   voidedAt: Date | null;
 
+  // Set when the client reports they paid. The owner confirms with mark-paid.
+  @Column({ name: 'payment_reported_at', type: 'datetime', nullable: true })
+  paymentReportedAt: Date | null;
+
+  @Column({
+    name: 'payment_reference',
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
+  paymentReference: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'datetime' })
   createdAt: Date;
 

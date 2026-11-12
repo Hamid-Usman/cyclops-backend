@@ -16,6 +16,8 @@ describe('AppController (e2e)', () => {
     })
       .overrideProvider(ConfigService)
       .useValue({
+        // Optional settings (REDIS_URL, GOOGLE_CLIENT_ID) are left unset.
+        get: () => undefined,
         getOrThrow: (key: string) => {
           if (key === 'DATABASE_URL') {
             return 'mysql://user:password@localhost:3306/test';
@@ -57,6 +59,11 @@ describe('AppController (e2e)', () => {
         expect(body.paths['/auth/me'].get.security).toEqual([
           { 'access-token': [] },
         ]);
+        expect(body.paths['/auth/google'].post).toBeDefined();
+        expect(body.paths['/client/me'].get).toBeDefined();
+        expect(
+          body.paths['/received-proposals/{id}/accept'].post,
+        ).toBeDefined();
       });
   });
 
