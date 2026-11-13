@@ -53,18 +53,19 @@ describe('DashboardCache', () => {
       .mockResolvedValueOnce('first')
       .mockResolvedValueOnce('second');
 
-    await dashboard.wrapForClient('id', 'overview', load, 1000);
-    // Same id, other scope: neither clears the client's cache.
-    await dashboard.invalidate('id');
-    await dashboard.invalidateClient('other-client');
-    expect(await dashboard.wrapForClient('id', 'overview', load, 1000)).toBe(
-      'first',
-    );
+    // A person who is a client of two owners: records a and b.
+    const read = () =>
+      dashboard.wrapForClients(['b', 'a'], 'overview', load, 1000);
 
-    await dashboard.invalidateClient('id');
-    expect(await dashboard.wrapForClient('id', 'overview', load, 1000)).toBe(
-      'second',
-    );
+    await read();
+    // Same id, other scope, or someone else's record: none clear it.
+    await dashboard.invalidate('a');
+    await dashboard.invalidateClient('other-client');
+    expect(await read()).toBe('first');
+
+    // A change to either of their records does.
+    await dashboard.invalidateClient('b');
+    expect(await read()).toBe('second');
   });
 
   it('ignores a missing client id', async () => {

@@ -62,11 +62,11 @@ export class ClientProposalService {
   ) {}
 
   async findAll(userId: string): Promise<ProposalSummaryResponseDto[]> {
-    const client = await this.findClient(userId);
-    await this.expireStale(this.dataSource.manager, client.id);
+    const clientIds = await this.findClientIds(userId);
+    await this.expireStale(this.dataSource.manager, clientIds);
     const proposals = await this.proposals.find({
       // Drafts are the owner's work in progress.
-      where: { clientId: client.id, status: Not(ProposalStatus.Draft) },
+      where: { clientId: In(clientIds), status: Not(ProposalStatus.Draft) },
       order: { sentAt: 'DESC' },
     });
     return proposals.map(toProposalSummary);
@@ -74,9 +74,11 @@ export class ClientProposalService {
 
   /** Opening a sent proposal marks it as viewed. */
   async findOne(userId: string, id: string): Promise<ProposalResponseDto> {
-    const client = await this.findClient(userId);
+    const clientIds = await this.findClientIds(userId);
+    let clientId = '';
     const changed = await this.dataSource.transaction(async (manager) => {
-      const proposal = await this.lockReceived(manager, client.id, id);
+      const proposal = await this.lockReceived(manager, clientIds, id);
+      clientId = proposal.clientId!;
       const now = new Date();
       if (OPEN_STATUSES.includes(proposal.status) && isExpired(proposal, now)) {
         await manager.update(
@@ -97,9 +99,9 @@ export class ClientProposalService {
       return false;
     });
     if (changed) {
-      await this.dashboardCache.invalidateClient(client.id);
+      await this.dashboardCache.invalidateClient(clientId);
     }
-    return this.getReceived(client.id, id);
+    return this.getReceived(clientIds, id);
   }
 
   /**
@@ -115,14 +117,16 @@ export class ClientProposalService {
     input: AcceptProposalDto,
     context: AcceptanceContext,
   ): Promise<ProposalResponseDto> {
-    const client = await this.findClient(userId);
+    const clientIds = await this.findClientIds(userId);
     const now = new Date();
     let ownerId = '';
+    let clientId = '';
 
     const expired = await this.dataSource.transaction(async (manager) => {
       // Lock order is proposal, then project, the same as sending.
-      const proposal = await this.lockReceived(manager, client.id, id);
+      const proposal = await this.lockReceived(manager, clientIds, id);
       ownerId = proposal.ownerId;
+      clientId = proposal.clientId!;
       if (this.expireIfStale(proposal, now)) {
         await manager.update(
           Proposal,
@@ -181,11 +185,11 @@ export class ClientProposalService {
     });
 
     await this.dashboardCache.invalidate(ownerId);
-    await this.dashboardCache.invalidateClient(client.id);
+    await this.dashboardCache.invalidateClient(clientId);
     if (expired) {
       throw new ConflictException('This proposal has expired');
     }
-    return this.getReceived(client.id, id);
+    return this.getReceived(clientIds, id);
   }
 
   async decline(
@@ -193,13 +197,15 @@ export class ClientProposalService {
     id: string,
     input: DeclineProposalDto,
   ): Promise<ProposalResponseDto> {
-    const client = await this.findClient(userId);
+    const clientIds = await this.findClientIds(userId);
     const now = new Date();
     let ownerId = '';
+    let clientId = '';
 
     const expired = await this.dataSource.transaction(async (manager) => {
-      const proposal = await this.lockReceived(manager, client.id, id);
+      const proposal = await this.lockReceived(manager, clientIds, id);
       ownerId = proposal.ownerId;
+      clientId = proposal.clientId!;
       if (this.expireIfStale(proposal, now)) {
         await manager.update(
           Proposal,
@@ -222,11 +228,11 @@ export class ClientProposalService {
     });
 
     await this.dashboardCache.invalidate(ownerId);
-    await this.dashboardCache.invalidateClient(client.id);
+    await this.dashboardCache.invalidateClient(clientId);
     if (expired) {
       throw new ConflictException('This proposal has expired');
     }
-    return this.getReceived(client.id, id);
+    return this.getReceived(clientIds, id);
   }
 
   /**
@@ -354,36 +360,46 @@ export class ClientProposalService {
   // Open proposals whose validUntil has passed become expired.
   private async expireStale(
     manager: EntityManager,
-    clientId: string,
+    clientIds: string[],
   ): Promise<void> {
     const result = await manager.update(
       Proposal,
       {
-        clientId,
+        clientId: In(clientIds),
         status: In(OPEN_STATUSES),
         validUntil: LessThanOrEqual(new Date()),
       },
       { status: ProposalStatus.Expired },
     );
     if (result.affected) {
-      await this.dashboardCache.invalidateClient(clientId);
+      await Promise.all(
+        clientIds.map((id) => this.dashboardCache.invalidateClient(id)),
+      );
     }
   }
 
-  private async findClient(userId: string): Promise<Client> {
-    const client = await this.clients.findOne({ where: { userId } });
-    if (!client) {
+  /** The person's client records, one per owner who added them. */
+  private async findClientIds(userId: string): Promise<string[]> {
+    const clients = await this.clients.find({
+      where: { userId },
+      select: { id: true },
+    });
+    if (clients.length === 0) {
       throw new NotFoundException('You are not a client');
     }
-    return client;
+    return clients.map((client) => client.id);
   }
 
   private async getReceived(
-    clientId: string,
+    clientIds: string[],
     id: string,
   ): Promise<ProposalResponseDto> {
     const proposal = await this.proposals.findOne({
-      where: { id, clientId, status: Not(ProposalStatus.Draft) },
+      where: {
+        id,
+        clientId: In(clientIds),
+        status: Not(ProposalStatus.Draft),
+      },
       relations: { milestones: true },
       order: { milestones: { position: 'ASC' } },
     });
@@ -395,11 +411,15 @@ export class ClientProposalService {
 
   private async lockReceived(
     manager: EntityManager,
-    clientId: string,
+    clientIds: string[],
     id: string,
   ): Promise<Proposal> {
     const proposal = await manager.findOne(Proposal, {
-      where: { id, clientId, status: Not(ProposalStatus.Draft) },
+      where: {
+        id,
+        clientId: In(clientIds),
+        status: Not(ProposalStatus.Draft),
+      },
       lock: { mode: 'pessimistic_write' },
     });
     if (!proposal) {

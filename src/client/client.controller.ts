@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
@@ -50,16 +51,19 @@ export class ClientController {
   @ApiOperation({ summary: 'Add an existing user as a client, by email or id' })
   @ApiCreatedResponse({ type: ClientResponseDto })
   @ApiNotFoundResponse({ description: 'User not found' })
-  @ApiConflictResponse({ description: 'This user is already a client' })
-  create(@Body() input: CreateClientDto) {
-    return this.clientService.create(input);
+  @ApiConflictResponse({
+    description: 'You have already added this user as a client',
+  })
+  @ApiBadRequestResponse({ description: 'You cannot add yourself' })
+  create(@Req() request: AuthenticatedRequest, @Body() input: CreateClientDto) {
+    return this.clientService.create(request.user.sub, input);
   }
 
   @Get()
-  @ApiOperation({ summary: 'List clients' })
+  @ApiOperation({ summary: 'List the clients you added' })
   @ApiOkResponse({ type: ClientResponseDto, isArray: true })
-  findAll() {
-    return this.clientService.findAll();
+  findAll(@Req() request: AuthenticatedRequest) {
+    return this.clientService.findAll(request.user.sub);
   }
 
   @Get('me')
@@ -103,11 +107,14 @@ export class ClientController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a client by id' })
+  @ApiOperation({ summary: 'Get one of your clients' })
   @ApiOkResponse({ type: ClientResponseDto })
   @ApiNotFoundResponse({ description: 'Client not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.clientService.findOne(id);
+  findOne(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.clientService.findOne(request.user.sub, id);
   }
 
   @Patch(':id')
@@ -115,10 +122,11 @@ export class ClientController {
   @ApiOkResponse({ type: ClientResponseDto })
   @ApiNotFoundResponse({ description: 'Client not found' })
   update(
+    @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() input: UpdateClientDto,
   ) {
-    return this.clientService.update(id, input);
+    return this.clientService.update(request.user.sub, id, input);
   }
 
   @Delete(':id')
@@ -126,7 +134,14 @@ export class ClientController {
   @ApiOperation({ summary: 'Delete a client' })
   @ApiNoContentResponse()
   @ApiNotFoundResponse({ description: 'Client not found' })
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.clientService.remove(id);
+  @ApiConflictResponse({
+    description:
+      'The client has projects, proposals or invoices. Archive it instead.',
+  })
+  remove(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.clientService.remove(request.user.sub, id);
   }
 }

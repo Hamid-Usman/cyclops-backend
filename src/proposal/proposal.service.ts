@@ -131,7 +131,7 @@ export class ProposalService {
       } else {
         // No project yet: accepting the proposal creates it.
         const client = await manager.findOne(Client, {
-          where: { id: input.clientId },
+          where: { id: input.clientId, ownerId },
         });
         if (!client) {
           throw new NotFoundException('Client not found');

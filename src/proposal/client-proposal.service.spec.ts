@@ -1,7 +1,7 @@
 import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { In, DataSource } from 'typeorm';
 import { Client } from '../client/client.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
 import { ClientProposalService } from './client-proposal.service';
@@ -51,7 +51,7 @@ describe('ClientProposalService', () => {
   let project: Project | null;
 
   const proposals = { findOne: jest.fn(), find: jest.fn() };
-  const clients = { findOne: jest.fn() };
+  const clients = { find: jest.fn() };
   const dashboardCache = {
     invalidate: jest.fn(),
     invalidateClient: jest.fn(),
@@ -89,7 +89,7 @@ describe('ClientProposalService', () => {
       id: 'project-id',
       status: ProjectStatus.Inactive,
     } as Project;
-    clients.findOne.mockResolvedValue({ id: CLIENT_ID, userId: USER_ID });
+    clients.find.mockResolvedValue([{ id: CLIENT_ID }]);
     manager.findOne.mockImplementation((entity: unknown) =>
       Promise.resolve(entity === Proposal ? proposal : project),
     );
@@ -98,7 +98,7 @@ describe('ClientProposalService', () => {
   });
 
   it('refuses users who are not clients', async () => {
-    clients.findOne.mockResolvedValue(null);
+    clients.find.mockResolvedValue([]);
     await expect(service.findAll(USER_ID)).rejects.toThrow(
       'You are not a client',
     );
@@ -106,18 +106,33 @@ describe('ClientProposalService', () => {
 
   it('lists only proposals sent to this client, expiring stale ones first', async () => {
     await expect(service.findAll(USER_ID)).resolves.toHaveLength(1);
-    expect(clients.findOne).toHaveBeenCalledWith({
-      where: { userId: USER_ID },
-    });
+    expect(clients.find).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: USER_ID } }),
+    );
     expect(manager.update).toHaveBeenCalledWith(
       Proposal,
-      expect.objectContaining({ clientId: CLIENT_ID }),
+      expect.objectContaining({ clientId: In([CLIENT_ID]) }),
       { status: ProposalStatus.Expired },
     );
     expect(dashboardCache.invalidateClient).toHaveBeenCalledWith(CLIENT_ID);
     expect(proposals.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ clientId: CLIENT_ID }),
+        where: expect.objectContaining({ clientId: In([CLIENT_ID]) }),
+      }),
+    );
+  });
+
+  it('includes proposals from every owner who added this person', async () => {
+    clients.find.mockResolvedValue([
+      { id: CLIENT_ID },
+      { id: 'other-owner-client' },
+    ]);
+    await service.findAll(USER_ID);
+    expect(proposals.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          clientId: In([CLIENT_ID, 'other-owner-client']),
+        }),
       }),
     );
   });

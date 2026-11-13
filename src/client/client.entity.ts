@@ -4,7 +4,7 @@ import {
   Entity,
   Index,
   JoinColumn,
-  OneToOne,
+  ManyToOne,
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -17,16 +17,29 @@ export enum ClientStatus {
   Archived = 'archived',
 }
 
+// A person (user) added as a client by an owner. Clients belong to the owner
+// who added them; the same person can be a client of several owners.
 @Entity('clients')
-@Index('UQ_clients_user_id', ['userId'], { unique: true })
+@Index('UQ_clients_owner_id_user_id', ['ownerId', 'userId'], { unique: true })
+@Index('IDX_clients_user_id', ['userId'])
 export class Client {
   @PrimaryColumn('char', { length: 36 })
   id: string;
 
+  @Column({ name: 'owner_id', type: 'char', length: 36 })
+  ownerId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({
+    name: 'owner_id',
+    foreignKeyConstraintName: 'FK_clients_owner_id',
+  })
+  owner: User;
+
   @Column({ name: 'user_id', type: 'char', length: 36 })
   userId: string;
 
-  @OneToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({
     name: 'user_id',
     foreignKeyConstraintName: 'FK_clients_user_id',

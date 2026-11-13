@@ -22,14 +22,25 @@ export class DashboardCache {
     return this.wrapScoped('dashboard', ownerId, key, load, ttlMs);
   }
 
-  /** Caches a read of what a client sees in their portal. */
-  wrapForClient<T>(
-    clientId: string,
+  /**
+   * Caches a read of what a person sees in their portal, across all their
+   * client records (one per owner). Invalidating any of them clears it.
+   */
+  async wrapForClients<T>(
+    clientIds: string[],
     key: string,
     load: () => Promise<T>,
     ttlMs: number,
   ): Promise<T> {
-    return this.wrapScoped('client-portal', clientId, key, load, ttlMs);
+    const ids = [...clientIds].sort();
+    const versions = await Promise.all(
+      ids.map((id) => this.version('client-portal', id)),
+    );
+    return this.cache.wrap(
+      `client-portal:${ids.join(',')}:v${versions.join('.')}:${key}`,
+      load,
+      ttlMs,
+    );
   }
 
   /** Call after any write that changes what the owner's dashboard shows. */

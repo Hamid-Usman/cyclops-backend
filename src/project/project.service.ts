@@ -59,7 +59,7 @@ export class ProjectService {
     input: CreateProjectDto,
   ): Promise<ProjectResponseDto> {
     const client = await this.clients.findOne({
-      where: { id: input.clientId },
+      where: { id: input.clientId, ownerId },
     });
     if (!client) {
       throw new NotFoundException('Client not found');

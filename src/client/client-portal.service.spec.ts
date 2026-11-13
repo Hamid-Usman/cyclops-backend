@@ -1,7 +1,7 @@
 import { ProjectMilestone } from '../project/project-milestone.entity';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, Not } from 'typeorm';
+import { In, DataSource, Not } from 'typeorm';
 import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Invoice, InvoiceStatus } from '../invoice/invoice.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
@@ -36,7 +36,7 @@ function invoice(overrides: Partial<Invoice>): Invoice {
 
 describe('ClientPortalService', () => {
   let service: ClientPortalService;
-  const clients = { findOne: jest.fn() };
+  const clients = { find: jest.fn() };
   const projects = { find: jest.fn() };
   const proposals = { find: jest.fn() };
   const invoices = { find: jest.fn(), findOne: jest.fn() };
@@ -51,8 +51,9 @@ describe('ClientPortalService', () => {
     invalidate: jest.fn(),
     invalidateClient: jest.fn(),
     // Passes straight through to the loader, like a cache miss.
-    wrapForClient: jest.fn(
-      (_clientId: string, _key: string, load: () => Promise<unknown>) => load(),
+    wrapForClients: jest.fn(
+      (_clientIds: string[], _key: string, load: () => Promise<unknown>) =>
+        load(),
     ),
   };
 
@@ -75,11 +76,13 @@ describe('ClientPortalService', () => {
     }).compile();
     service = module.get(ClientPortalService);
 
-    clients.findOne.mockResolvedValue({
-      id: 'client-id',
-      status: ClientStatus.Active,
-      user: { ...user, passwordHash: 'secret' },
-    });
+    clients.find.mockResolvedValue([
+      {
+        id: 'client-id',
+        status: ClientStatus.Active,
+        user: { ...user, passwordHash: 'secret' },
+      },
+    ]);
     projects.find.mockResolvedValue([
       { id: 'p1', clientId: 'client-id', status: ProjectStatus.Active },
       { id: 'p2', clientId: 'client-id', status: ProjectStatus.Inactive },
@@ -98,7 +101,7 @@ describe('ClientPortalService', () => {
   });
 
   it("refuses users who aren't clients", async () => {
-    clients.findOne.mockResolvedValue(null);
+    clients.find.mockResolvedValue([]);
     await expect(service.getOverview('someone')).rejects.toThrow(
       'You are not a client',
     );
@@ -106,26 +109,33 @@ describe('ClientPortalService', () => {
 
   it("only loads this client's shared records, never drafts", async () => {
     await service.getOverview('user-id', NOW);
-    expect(clients.findOne).toHaveBeenCalledWith({
+    expect(clients.find).toHaveBeenCalledWith({
       where: { userId: 'user-id' },
       relations: { user: true },
+      order: { createdAt: 'DESC' },
     });
     expect(proposals.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { clientId: 'client-id', status: Not(ProposalStatus.Draft) },
+        where: {
+          clientId: In(['client-id']),
+          status: Not(ProposalStatus.Draft),
+        },
       }),
     );
     expect(invoices.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { clientId: 'client-id', status: Not(InvoiceStatus.Draft) },
+        where: {
+          clientId: In(['client-id']),
+          status: Not(InvoiceStatus.Draft),
+        },
       }),
     );
   });
 
-  it('caches the overview per client, per day', async () => {
+  it('caches the overview per person, per day', async () => {
     await service.getOverview('user-id', NOW);
-    expect(dashboardCache.wrapForClient).toHaveBeenCalledWith(
-      'client-id',
+    expect(dashboardCache.wrapForClients).toHaveBeenCalledWith(
+      ['client-id'],
       'overview:2026-11-12',
       expect.any(Function),
       expect.any(Number),
@@ -174,7 +184,7 @@ describe('ClientPortalService', () => {
         expect.objectContaining({
           where: {
             id: 'a',
-            clientId: 'client-id',
+            clientId: In(['client-id']),
             status: Not(InvoiceStatus.Draft),
           },
         }),

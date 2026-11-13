@@ -71,12 +71,12 @@ export class ClientPortalService {
     invoiceId: string,
     input: ReportPaymentDto,
   ): Promise<InvoiceResponseDto> {
-    const client = await this.findClient(userId);
-    const ownerId = await this.dataSource.transaction(async (manager) => {
+    const clients = await this.findClients(userId);
+    const invoice = await this.dataSource.transaction(async (manager) => {
       const invoice = await manager.findOne(Invoice, {
         where: {
           id: invoiceId,
-          clientId: client.id,
+          clientId: In(clients.map((client) => client.id)),
           status: Not(InvoiceStatus.Draft),
         },
         lock: { mode: 'pessimistic_write' },
@@ -97,10 +97,10 @@ export class ClientPortalService {
           paymentReference: input.reference?.trim() || null,
         },
       );
-      return invoice.ownerId;
+      return invoice;
     });
-    await this.dashboardCache.invalidate(ownerId);
-    await this.dashboardCache.invalidateClient(client.id);
+    await this.dashboardCache.invalidate(invoice.ownerId);
+    await this.dashboardCache.invalidateClient(invoice.clientId);
 
     const updated = await this.invoices.findOne({
       where: { id: invoiceId },
@@ -110,46 +110,51 @@ export class ClientPortalService {
     return toInvoiceResponse(updated!);
   }
 
-  private async findClient(userId: string): Promise<Client> {
-    const client = await this.clients.findOne({
+  /** The person's client records, one per owner, most recent first. */
+  private async findClients(userId: string): Promise<Client[]> {
+    const clients = await this.clients.find({
       where: { userId },
       relations: { user: true },
+      order: { createdAt: 'DESC' },
     });
-    if (!client) {
+    if (clients.length === 0) {
       throw new NotFoundException('You are not a client');
     }
-    return client;
+    return clients;
   }
 
   async getOverview(
     userId: string,
     now = new Date(),
   ): Promise<ClientOverviewResponseDto> {
-    const client = await this.findClient(userId);
+    const clients = await this.findClients(userId);
     // Keyed by day because isOverdue depends on today's date.
-    return this.dashboardCache.wrapForClient(
-      client.id,
+    return this.dashboardCache.wrapForClients(
+      clients.map((client) => client.id),
       `overview:${toDateOnly(now)}`,
-      () => this.loadOverview(client, now),
+      () => this.loadOverview(clients, now),
       OVERVIEW_CACHE_TTL_MS,
     );
   }
 
   private async loadOverview(
-    client: Client,
+    clients: Client[],
     now: Date,
   ): Promise<ClientOverviewResponseDto> {
+    // The overview's `client` is the most recent record; the lists cover all.
+    const [client] = clients;
+    const clientId = In(clients.map((record) => record.id));
     const [projects, proposals, invoices] = await Promise.all([
       this.projects.find({
-        where: { clientId: client.id },
+        where: { clientId },
         order: { createdAt: 'DESC' },
       }),
       this.proposals.find({
-        where: { clientId: client.id, status: Not(ProposalStatus.Draft) },
+        where: { clientId, status: Not(ProposalStatus.Draft) },
         order: { sentAt: 'DESC' },
       }),
       this.invoices.find({
-        where: { clientId: client.id, status: Not(InvoiceStatus.Draft) },
+        where: { clientId, status: Not(InvoiceStatus.Draft) },
         relations: { lineItems: true },
         order: { issueDate: 'DESC', lineItems: { position: 'ASC' } },
       }),

@@ -31,33 +31,35 @@ describe('ClientController', () => {
     controller = module.get(ClientController);
   });
 
-  it('passes each request to the service', async () => {
-    await controller.create({ email: 'user@example.com' });
-    await controller.findAll();
-    await controller.findOne('client-id');
-    await controller.getMine({ headers: {}, user: { sub: 'user-id' } });
-    await controller.getMyOverview({ headers: {}, user: { sub: 'user-id' } });
-    await controller.update('client-id', { status: ClientStatus.Inactive });
-    await controller.remove('client-id');
+  it('passes each request to the service, as the signed-in user', async () => {
+    const request = { headers: {}, user: { sub: 'user-id' } };
 
-    expect(clientService.create).toHaveBeenCalledWith({
+    await controller.create(request, { email: 'user@example.com' });
+    await controller.findAll(request);
+    await controller.findOne(request, 'client-id');
+    await controller.getMine(request);
+    await controller.getMyOverview(request);
+    await controller.update(request, 'client-id', {
+      status: ClientStatus.Inactive,
+    });
+    await controller.remove(request, 'client-id');
+    await controller.reportPayment(request, 'invoice-id', { reference: 'r' });
+
+    expect(clientService.create).toHaveBeenCalledWith('user-id', {
       email: 'user@example.com',
     });
-    expect(clientService.findAll).toHaveBeenCalled();
-    expect(clientService.findOne).toHaveBeenCalledWith('client-id');
+    expect(clientService.findAll).toHaveBeenCalledWith('user-id');
+    expect(clientService.findOne).toHaveBeenCalledWith('user-id', 'client-id');
     expect(clientService.findForUser).toHaveBeenCalledWith('user-id');
     expect(clientPortal.getOverview).toHaveBeenCalledWith('user-id');
-
-    const request = { headers: {}, user: { sub: 'user-id' } };
-    await controller.reportPayment(request, 'invoice-id', { reference: 'r' });
+    expect(clientService.update).toHaveBeenCalledWith('user-id', 'client-id', {
+      status: ClientStatus.Inactive,
+    });
+    expect(clientService.remove).toHaveBeenCalledWith('user-id', 'client-id');
     expect(clientPortal.reportPayment).toHaveBeenCalledWith(
       'user-id',
       'invoice-id',
       { reference: 'r' },
     );
-    expect(clientService.update).toHaveBeenCalledWith('client-id', {
-      status: ClientStatus.Inactive,
-    });
-    expect(clientService.remove).toHaveBeenCalledWith('client-id');
   });
 });
