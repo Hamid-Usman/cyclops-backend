@@ -19,7 +19,11 @@ export enum ProjectStatus {
 }
 
 @Entity('projects')
-@Index('IDX_projects_owner_id_status', ['ownerId', 'status'])
+@Index('IDX_projects_owner_id_status_due_date', [
+  'ownerId',
+  'status',
+  'dueDate',
+])
 @Index('IDX_projects_client_id', ['clientId'])
 export class Project {
   @PrimaryColumn('char', { length: 36 })

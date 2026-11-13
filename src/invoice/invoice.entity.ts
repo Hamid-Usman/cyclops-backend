@@ -23,7 +23,11 @@ export enum InvoiceStatus {
 
 @Entity('invoices')
 @Index('UQ_invoices_owner_id_number', ['ownerId', 'number'], { unique: true })
-@Index('IDX_invoices_owner_id_status', ['ownerId', 'status'])
+@Index('IDX_invoices_owner_id_status_due_date', [
+  'ownerId',
+  'status',
+  'dueDate',
+])
 @Index('IDX_invoices_project_id', ['projectId'])
 @Index('IDX_invoices_client_id', ['clientId'])
 export class Invoice {

@@ -17,6 +17,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { PaginationQueryDto } from '../common/pagination';
 import {
   IsAmount,
   IsDateOnly,
@@ -211,7 +212,7 @@ export class UpdateProposalDto extends ProposalFieldsDto {
   title?: string;
 }
 
-export class ListProposalsQueryDto {
+export class ListProposalsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

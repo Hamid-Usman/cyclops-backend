@@ -4,9 +4,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { toPage } from '../common/pagination';
 import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { LIST_CACHE_TTL_MS, listCacheKey } from '../cache/list-cache-key';
 import { Client } from '../client/client.entity';
 import {
   CreateProjectDto,
@@ -96,15 +98,23 @@ export class ProjectService {
     ownerId: string,
     query: ListProjectsQueryDto,
   ): Promise<ProjectResponseDto[]> {
-    const projects = await this.projects.find({
-      where: {
-        ownerId,
-        ...(query.status !== undefined && { status: query.status }),
-        ...(query.clientId !== undefined && { clientId: query.clientId }),
+    return this.dashboardCache.wrap(
+      ownerId,
+      listCacheKey('projects', query),
+      async () => {
+        const projects = await this.projects.find({
+          where: {
+            ownerId,
+            ...(query.status !== undefined && { status: query.status }),
+            ...(query.clientId !== undefined && { clientId: query.clientId }),
+          },
+          order: { createdAt: 'DESC', id: 'ASC' },
+          ...toPage(query),
+        });
+        return projects.map(toProjectResponse);
       },
-      order: { createdAt: 'DESC' },
-    });
-    return projects.map(toProjectResponse);
+      LIST_CACHE_TTL_MS,
+    );
   }
 
   async findOne(ownerId: string, id: string): Promise<ProjectResponseDto> {
@@ -193,6 +203,7 @@ export class ProjectService {
     if (!result.affected) {
       throw new NotFoundException('Milestone not found');
     }
+    await this.dashboardCache.invalidate(ownerId);
     await this.dashboardCache.invalidateClient(project.clientId);
     const milestone = await this.milestones.findOneOrFail({
       where: { id: milestoneId },

@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, DataSource, Not } from 'typeorm';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { passThroughDashboardCache } from '../cache/dashboard-cache.mock-spec';
 import { Invoice, InvoiceStatus } from '../invoice/invoice.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
 import { Proposal, ProposalStatus } from '../proposal/proposal.entity';
@@ -48,8 +49,7 @@ describe('ClientPortalService', () => {
     ),
   };
   const dashboardCache = {
-    invalidate: jest.fn(),
-    invalidateClient: jest.fn(),
+    ...passThroughDashboardCache(),
     // Passes straight through to the loader, like a cache miss.
     wrapForClients: jest.fn(
       (_clientIds: string[], _key: string, load: () => Promise<unknown>) =>

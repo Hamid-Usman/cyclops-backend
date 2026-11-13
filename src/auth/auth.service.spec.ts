@@ -1,3 +1,5 @@
+import { passThroughDashboardCache } from '../cache/dashboard-cache.mock-spec';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -27,6 +29,7 @@ describe('AuthService', () => {
         { provide: getRepositoryToken(User), useValue: users },
         { provide: JwtService, useValue: jwtService },
         { provide: GoogleTokenVerifier, useValue: googleTokens },
+        { provide: DashboardCache, useValue: passThroughDashboardCache() },
       ],
     }).compile();
     authService = module.get(AuthService);

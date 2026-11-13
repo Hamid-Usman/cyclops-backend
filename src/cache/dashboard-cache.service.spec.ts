@@ -6,6 +6,7 @@ function makeCache() {
   return {
     store,
     get: jest.fn(async (key: string) => store.get(key)),
+    mget: jest.fn(async (keys: string[]) => keys.map((key) => store.get(key))),
     set: jest.fn(async (key: string, value: unknown) => {
       store.set(key, value);
     }),
@@ -66,6 +67,33 @@ describe('DashboardCache', () => {
     // A change to either of their records does.
     await dashboard.invalidateClient('b');
     expect(await read()).toBe('second');
+  });
+
+  it("caches a user's reads until their client records change", async () => {
+    const cache = makeCache();
+    const dashboard = new DashboardCache(cache as never);
+    const load = jest
+      .fn()
+      .mockResolvedValueOnce('first')
+      .mockResolvedValueOnce('second');
+    const read = () => dashboard.wrapForUser('user', 'client-ids', load, 1000);
+
+    expect(await read()).toBe('first');
+    // Owner and client-record changes are other scopes.
+    await dashboard.invalidate('user');
+    await dashboard.invalidateClient('user');
+    expect(await read()).toBe('first');
+
+    await dashboard.invalidateUser('user');
+    expect(await read()).toBe('second');
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a missing user id', async () => {
+    const cache = makeCache();
+    const dashboard = new DashboardCache(cache as never);
+    await dashboard.invalidateUser(undefined);
+    expect(cache.set).not.toHaveBeenCalled();
   });
 
   it('ignores a missing client id', async () => {

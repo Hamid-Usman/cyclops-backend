@@ -13,12 +13,17 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { Repository, QueryFailedError } from 'typeorm';
+import { DashboardCache } from '../cache/dashboard-cache.service';
 import { LoginDto, RegisterDto } from './auth.dto';
 import { PublicUser } from './auth.types';
 import { GoogleTokenVerifier } from './google-token.verifier';
 import { User } from './user.entity';
 
 const TOKEN_EXPIRY_SECONDS = 60 * 60;
+
+// The public profile (id, email, display name) never changes once created,
+// so `GET /auth/me` can be cached for a long time.
+const PROFILE_CACHE_TTL_MS = 60 * 60_000;
 const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(64)}`;
 
 function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
@@ -61,6 +66,7 @@ export class AuthService {
     private readonly users: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly googleTokens: GoogleTokenVerifier,
+    private readonly cache: DashboardCache,
   ) {}
 
   async register(input: RegisterDto) {
@@ -208,12 +214,20 @@ export class AuthService {
     return toPublicUser(user);
   }
 
-  async findPublicUser(id: string): Promise<PublicUser> {
-    const user = await this.users.findOne({ where: { id } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-    return toPublicUser(user);
+  findPublicUser(id: string): Promise<PublicUser> {
+    // A missing user throws, and errors are never cached.
+    return this.cache.wrapForUser(
+      id,
+      'profile',
+      async () => {
+        const user = await this.users.findOne({ where: { id } });
+        if (!user) {
+          throw new NotFoundException('User not found');
+        }
+        return toPublicUser(user);
+      },
+      PROFILE_CACHE_TTL_MS,
+    );
   }
 
   private async createAuthResponse(user: User) {

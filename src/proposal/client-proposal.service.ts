@@ -39,6 +39,10 @@ import { assertCanAccept, assertCanRespond, isExpired } from './proposal.rules';
 // Statuses a client is still able to answer.
 const OPEN_STATUSES = [ProposalStatus.Sent, ProposalStatus.Viewed];
 
+// Which client records a person has changes only when an owner adds,
+// changes or removes them (ClientService clears it then).
+const CLIENT_IDS_CACHE_TTL_MS = 10 * 60_000;
+
 // Who accepted, recorded with the acceptance as evidence.
 export interface AcceptanceContext {
   ip: string | null;
@@ -76,9 +80,11 @@ export class ClientProposalService {
   async findOne(userId: string, id: string): Promise<ProposalResponseDto> {
     const clientIds = await this.findClientIds(userId);
     let clientId = '';
+    let ownerId = '';
     const changed = await this.dataSource.transaction(async (manager) => {
       const proposal = await this.lockReceived(manager, clientIds, id);
       clientId = proposal.clientId!;
+      ownerId = proposal.ownerId;
       const now = new Date();
       if (OPEN_STATUSES.includes(proposal.status) && isExpired(proposal, now)) {
         await manager.update(
@@ -99,6 +105,8 @@ export class ClientProposalService {
       return false;
     });
     if (changed) {
+      // The owner's dashboard and proposal list show the new status too.
+      await this.dashboardCache.invalidate(ownerId);
       await this.dashboardCache.invalidateClient(clientId);
     }
     return this.getReceived(clientIds, id);
@@ -372,22 +380,38 @@ export class ClientProposalService {
       { status: ProposalStatus.Expired },
     );
     if (result.affected) {
-      await Promise.all(
-        clientIds.map((id) => this.dashboardCache.invalidateClient(id)),
-      );
+      // The owners' dashboards and proposal lists show the new status too.
+      const owners = await manager.find(Client, {
+        where: { id: In(clientIds) },
+        select: { id: true, ownerId: true },
+      });
+      await Promise.all([
+        ...clientIds.map((id) => this.dashboardCache.invalidateClient(id)),
+        ...[...new Set(owners.map((client) => client.ownerId))].map((owner) =>
+          this.dashboardCache.invalidate(owner),
+        ),
+      ]);
     }
   }
 
   /** The person's client records, one per owner who added them. */
   private async findClientIds(userId: string): Promise<string[]> {
-    const clients = await this.clients.find({
-      where: { userId },
-      select: { id: true },
-    });
-    if (clients.length === 0) {
+    const clientIds = await this.dashboardCache.wrapForUser(
+      userId,
+      'client-ids',
+      async () => {
+        const clients = await this.clients.find({
+          where: { userId },
+          select: { id: true },
+        });
+        return clients.map((client) => client.id);
+      },
+      CLIENT_IDS_CACHE_TTL_MS,
+    );
+    if (clientIds.length === 0) {
       throw new NotFoundException('You are not a client');
     }
-    return clients.map((client) => client.id);
+    return clientIds;
   }
 
   private async getReceived(

@@ -1,4 +1,5 @@
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { passThroughDashboardCache } from '../cache/dashboard-cache.mock-spec';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, DataSource } from 'typeorm';
@@ -52,10 +53,7 @@ describe('ClientProposalService', () => {
 
   const proposals = { findOne: jest.fn(), find: jest.fn() };
   const clients = { find: jest.fn() };
-  const dashboardCache = {
-    invalidate: jest.fn(),
-    invalidateClient: jest.fn(),
-  };
+  const dashboardCache = passThroughDashboardCache();
   const manager = {
     findOne: jest.fn(),
     update: jest.fn().mockResolvedValue({ affected: 1 }),

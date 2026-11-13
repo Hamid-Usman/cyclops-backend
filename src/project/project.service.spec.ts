@@ -1,5 +1,6 @@
 import { ProjectMilestone } from './project-milestone.entity';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { passThroughDashboardCache } from '../cache/dashboard-cache.mock-spec';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -56,7 +57,7 @@ describe('ProjectService', () => {
         { provide: DataSource, useValue: dataSource },
         {
           provide: DashboardCache,
-          useValue: { invalidate: jest.fn(), invalidateClient: jest.fn() },
+          useValue: passThroughDashboardCache(),
         },
       ],
     }).compile();

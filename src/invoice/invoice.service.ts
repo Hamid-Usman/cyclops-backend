@@ -5,9 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { toPage } from '../common/pagination';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, LessThan, Repository } from 'typeorm';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { LIST_CACHE_TTL_MS, listCacheKey } from '../cache/list-cache-key';
 import { ProjectMilestone } from '../project/project-milestone.entity';
 import { Project, ProjectStatus } from '../project/project.entity';
 import { Proposal, ProposalStatus } from '../proposal/proposal.entity';
@@ -111,22 +113,34 @@ export class InvoiceService {
     query: ListInvoicesQueryDto,
   ): Promise<InvoiceResponseDto[]> {
     const overdueOnly = query.overdue === 'true';
-    const invoices = await this.invoices.find({
-      ...WITH_LINE_ITEMS,
-      where: {
-        ownerId,
-        ...(query.projectId !== undefined && { projectId: query.projectId }),
-        ...(query.clientId !== undefined && { clientId: query.clientId }),
-        ...(query.status !== undefined && { status: query.status }),
-        ...(overdueOnly && {
-          status: InvoiceStatus.Sent,
-          dueDate: LessThan(toDateOnly(new Date())),
-        }),
+    // Keyed by day because "overdue" depends on today's date.
+    const today = toDateOnly(new Date());
+    return this.dashboardCache.wrap(
+      ownerId,
+      listCacheKey(`invoices:${today}`, query),
+      async () => {
+        const invoices = await this.invoices.find({
+          ...WITH_LINE_ITEMS,
+          ...toPage(query),
+          where: {
+            ownerId,
+            ...(query.projectId !== undefined && {
+              projectId: query.projectId,
+            }),
+            ...(query.clientId !== undefined && { clientId: query.clientId }),
+            ...(query.status !== undefined && { status: query.status }),
+            ...(overdueOnly && {
+              status: InvoiceStatus.Sent,
+              dueDate: LessThan(today),
+            }),
+          },
+          order: { createdAt: 'DESC', id: 'ASC', ...WITH_LINE_ITEMS.order },
+        });
+        const now = new Date();
+        return invoices.map((invoice) => toInvoiceResponse(invoice, now));
       },
-      order: { createdAt: 'DESC', ...WITH_LINE_ITEMS.order },
-    });
-    const now = new Date();
-    return invoices.map((invoice) => toInvoiceResponse(invoice, now));
+      LIST_CACHE_TTL_MS,
+    );
   }
 
   async findOne(ownerId: string, id: string): Promise<InvoiceResponseDto> {

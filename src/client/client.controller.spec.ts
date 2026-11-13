@@ -35,7 +35,7 @@ describe('ClientController', () => {
     const request = { headers: {}, user: { sub: 'user-id' } };
 
     await controller.create(request, { email: 'user@example.com' });
-    await controller.findAll(request);
+    await controller.findAll(request, { limit: 20, offset: 40 });
     await controller.findOne(request, 'client-id');
     await controller.getMine(request);
     await controller.getMyOverview(request);
@@ -48,7 +48,10 @@ describe('ClientController', () => {
     expect(clientService.create).toHaveBeenCalledWith('user-id', {
       email: 'user@example.com',
     });
-    expect(clientService.findAll).toHaveBeenCalledWith('user-id');
+    expect(clientService.findAll).toHaveBeenCalledWith('user-id', {
+      limit: 20,
+      offset: 40,
+    });
     expect(clientService.findOne).toHaveBeenCalledWith('user-id', 'client-id');
     expect(clientService.findForUser).toHaveBeenCalledWith('user-id');
     expect(clientPortal.getOverview).toHaveBeenCalledWith('user-id');

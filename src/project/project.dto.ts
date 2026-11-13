@@ -7,6 +7,7 @@ import {
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import { PaginationQueryDto } from '../common/pagination';
 import {
   IsDateOnly,
   IsNotBlank,
@@ -77,7 +78,7 @@ export class UpdateProjectDto {
   status?: ProjectStatus;
 }
 
-export class ListProjectsQueryDto {
+export class ListProjectsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: ProjectStatus })
   @IsOptional()
   @IsEnum(ProjectStatus)

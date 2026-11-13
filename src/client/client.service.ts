@@ -5,10 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { PaginationQueryDto, toPage } from '../common/pagination';
 import { randomUUID } from 'node:crypto';
 import { DeleteResult, QueryFailedError, Repository } from 'typeorm';
 import { User } from '../auth/user.entity';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { LIST_CACHE_TTL_MS, listCacheKey } from '../cache/list-cache-key';
 import { CreateClientDto, UpdateClientDto } from './client.dto';
 import { Client, ClientStatus } from './client.entity';
 import { ClientResponseDto } from './client.responses';
@@ -65,16 +67,29 @@ export class ClientService {
       throw error;
     }
 
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateUser(user.id);
     return toClientResponse(client, user);
   }
 
-  async findAll(ownerId: string): Promise<ClientResponseDto[]> {
-    const clients = await this.clients.find({
-      where: { ownerId },
-      relations: { user: true },
-      order: { createdAt: 'DESC' },
-    });
-    return clients.map((client) => toClientResponse(client, client.user));
+  async findAll(
+    ownerId: string,
+    page: PaginationQueryDto = {},
+  ): Promise<ClientResponseDto[]> {
+    return this.dashboardCache.wrap(
+      ownerId,
+      listCacheKey('clients', page),
+      async () => {
+        const clients = await this.clients.find({
+          where: { ownerId },
+          relations: { user: true },
+          order: { createdAt: 'DESC', id: 'ASC' },
+          ...toPage(page),
+        });
+        return clients.map((client) => toClientResponse(client, client.user));
+      },
+      LIST_CACHE_TTL_MS,
+    );
   }
 
   async findOne(ownerId: string, id: string): Promise<ClientResponseDto> {
@@ -117,11 +132,22 @@ export class ClientService {
     if (!result.affected) {
       throw new NotFoundException('Client not found');
     }
+    const updated = await this.findOne(ownerId, id);
+    await this.dashboardCache.invalidate(ownerId);
     await this.dashboardCache.invalidateClient(id);
-    return this.findOne(ownerId, id);
+    await this.dashboardCache.invalidateUser(updated.user.id);
+    return updated;
   }
 
   async remove(ownerId: string, id: string): Promise<void> {
+    // Read the person first: their cached client records need clearing.
+    const client = await this.clients.findOne({
+      where: { id, ownerId },
+      select: { id: true, userId: true },
+    });
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
     let result: DeleteResult;
     try {
       result = await this.clients.delete({ id, ownerId });
@@ -141,6 +167,9 @@ export class ClientService {
     if (!result.affected) {
       throw new NotFoundException('Client not found');
     }
+    await this.dashboardCache.invalidate(ownerId);
+    await this.dashboardCache.invalidateClient(id);
+    await this.dashboardCache.invalidateUser(client.userId);
   }
 
   private async findUser(input: CreateClientDto): Promise<User> {

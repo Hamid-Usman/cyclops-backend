@@ -37,7 +37,7 @@ export enum DurationUnit {
 @Entity('proposals')
 @Index('IDX_proposals_project_id_status', ['projectId', 'status'])
 @Index('IDX_proposals_client_id', ['clientId'])
-@Index('IDX_proposals_owner_id', ['ownerId'])
+@Index('IDX_proposals_owner_id_created_at', ['ownerId', 'createdAt'])
 export class Proposal {
   @PrimaryColumn('char', { length: 36 })
   id: string;

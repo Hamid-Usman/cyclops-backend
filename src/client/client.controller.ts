@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -26,6 +27,7 @@ import {
 } from '@nestjs/swagger';
 import type { AuthenticatedRequest } from '../auth/auth.types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PaginationQueryDto } from '../common/pagination';
 import { InvoiceResponseDto, ReportPaymentDto } from '../invoice/invoice.dto';
 import { CreateClientDto, UpdateClientDto } from './client.dto';
 import { ClientPortalService } from './client-portal.service';
@@ -62,8 +64,11 @@ export class ClientController {
   @Get()
   @ApiOperation({ summary: 'List the clients you added' })
   @ApiOkResponse({ type: ClientResponseDto, isArray: true })
-  findAll(@Req() request: AuthenticatedRequest) {
-    return this.clientService.findAll(request.user.sub);
+  findAll(
+    @Req() request: AuthenticatedRequest,
+    @Query() page: PaginationQueryDto,
+  ) {
+    return this.clientService.findAll(request.user.sub, page);
   }
 
   @Get('me')

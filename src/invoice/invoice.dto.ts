@@ -17,6 +17,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { PaginationQueryDto } from '../common/pagination';
 import {
   IsAmount,
   IsDateOnly,
@@ -169,7 +170,7 @@ export class MarkInvoicePaidDto {
   paidAt?: Date;
 }
 
-export class ListInvoicesQueryDto {
+export class ListInvoicesQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

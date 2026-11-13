@@ -5,9 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { toPage } from '../common/pagination';
 import { randomUUID } from 'node:crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { LIST_CACHE_TTL_MS, listCacheKey } from '../cache/list-cache-key';
 import { Client } from '../client/client.entity';
 import { assertPaymentSchedule } from '../project/milestone.rules';
 import { Project, ProjectStatus } from '../project/project.entity';
@@ -169,16 +171,26 @@ export class ProposalService {
     ownerId: string,
     query: ListProposalsQueryDto,
   ): Promise<ProposalSummaryResponseDto[]> {
-    const proposals = await this.proposals.find({
-      where: {
-        ownerId,
-        ...(query.projectId !== undefined && { projectId: query.projectId }),
-        ...(query.clientId !== undefined && { clientId: query.clientId }),
-        ...(query.status !== undefined && { status: query.status }),
+    return this.dashboardCache.wrap(
+      ownerId,
+      listCacheKey('proposals', query),
+      async () => {
+        const proposals = await this.proposals.find({
+          where: {
+            ownerId,
+            ...(query.projectId !== undefined && {
+              projectId: query.projectId,
+            }),
+            ...(query.clientId !== undefined && { clientId: query.clientId }),
+            ...(query.status !== undefined && { status: query.status }),
+          },
+          order: { createdAt: 'DESC', id: 'ASC' },
+          ...toPage(query),
+        });
+        return proposals.map(toProposalSummary);
       },
-      order: { createdAt: 'DESC' },
-    });
-    return proposals.map(toProposalSummary);
+      LIST_CACHE_TTL_MS,
+    );
   }
 
   async findOne(ownerId: string, id: string): Promise<ProposalResponseDto> {

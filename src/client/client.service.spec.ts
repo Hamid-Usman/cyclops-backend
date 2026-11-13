@@ -6,6 +6,7 @@ import { User } from '../auth/user.entity';
 import { Client, ClientStatus } from './client.entity';
 import { ClientService } from './client.service';
 import { DashboardCache } from '../cache/dashboard-cache.service';
+import { passThroughDashboardCache } from '../cache/dashboard-cache.mock-spec';
 
 const OWNER = 'owner-id';
 
@@ -25,6 +26,7 @@ describe('ClientService', () => {
     update: jest.fn(),
   };
   const users = { findOne: jest.fn() };
+  const cache = passThroughDashboardCache();
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -34,10 +36,7 @@ describe('ClientService', () => {
         ClientService,
         { provide: getRepositoryToken(Client), useValue: clients },
         { provide: getRepositoryToken(User), useValue: users },
-        {
-          provide: DashboardCache,
-          useValue: { invalidateClient: jest.fn() },
-        },
+        { provide: DashboardCache, useValue: cache },
       ],
     }).compile();
     service = module.get(ClientService);
@@ -149,18 +148,25 @@ describe('ClientService', () => {
     );
   });
 
-  it('deletes a client or throws not found', async () => {
+  it('deletes a client, clears the caches that showed it, or throws not found', async () => {
+    clients.findOne.mockResolvedValueOnce({ id: 'c1', userId: user.id });
     clients.delete.mockResolvedValueOnce({ affected: 1 });
     await expect(service.remove(OWNER, 'c1')).resolves.toBeUndefined();
     expect(clients.delete).toHaveBeenCalledWith({ id: 'c1', ownerId: OWNER });
+    expect(cache.invalidate).toHaveBeenCalledWith(OWNER);
+    expect(cache.invalidateClient).toHaveBeenCalledWith('c1');
+    expect(cache.invalidateUser).toHaveBeenCalledWith(user.id);
 
-    clients.delete.mockResolvedValueOnce({ affected: 0 });
+    clients.findOne.mockResolvedValueOnce(null);
+    clients.delete.mockClear();
     await expect(service.remove(OWNER, 'missing')).rejects.toThrow(
       'Client not found',
     );
+    expect(clients.delete).not.toHaveBeenCalled();
   });
 
   it('rejects deleting a client that has projects, proposals or invoices', async () => {
+    clients.findOne.mockResolvedValueOnce({ id: 'c1', userId: user.id });
     clients.delete.mockRejectedValueOnce(
       new QueryFailedError('DELETE', [], {
         code: 'ER_ROW_IS_REFERENCED_2',

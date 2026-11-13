@@ -29,6 +29,18 @@ import { ClientOverviewResponseDto } from './client.responses';
 // client sees clear it (see DashboardCache.invalidateClient).
 const OVERVIEW_CACHE_TTL_MS = 30_000;
 
+// Which client records a person has changes only when an owner adds,
+// changes or removes them (ClientService clears it then).
+const CLIENT_RECORDS_CACHE_TTL_MS = 10 * 60_000;
+
+// What the portal needs of a client record. Kept small and plain so it
+// survives a round trip through Redis as JSON.
+interface ClientRecord {
+  id: string;
+  status: Client['status'];
+  user: { id: string; email: string; displayName: string };
+}
+
 function totalsByCurrency(invoices: InvoiceResponseDto[]): CurrencyTotalDto[] {
   const totals = new Map<string, number>();
   for (const invoice of invoices) {
@@ -111,12 +123,28 @@ export class ClientPortalService {
   }
 
   /** The person's client records, one per owner, most recent first. */
-  private async findClients(userId: string): Promise<Client[]> {
-    const clients = await this.clients.find({
-      where: { userId },
-      relations: { user: true },
-      order: { createdAt: 'DESC' },
-    });
+  private async findClients(userId: string): Promise<ClientRecord[]> {
+    const clients = await this.dashboardCache.wrapForUser(
+      userId,
+      'client-records',
+      async (): Promise<ClientRecord[]> => {
+        const found = await this.clients.find({
+          where: { userId },
+          relations: { user: true },
+          order: { createdAt: 'DESC' },
+        });
+        return found.map((client) => ({
+          id: client.id,
+          status: client.status,
+          user: {
+            id: client.user.id,
+            email: client.user.email,
+            displayName: client.user.displayName,
+          },
+        }));
+      },
+      CLIENT_RECORDS_CACHE_TTL_MS,
+    );
     if (clients.length === 0) {
       throw new NotFoundException('You are not a client');
     }
@@ -138,13 +166,15 @@ export class ClientPortalService {
   }
 
   private async loadOverview(
-    clients: Client[],
+    clients: ClientRecord[],
     now: Date,
   ): Promise<ClientOverviewResponseDto> {
     // The overview's `client` is the most recent record; the lists cover all.
     const [client] = clients;
     const clientId = In(clients.map((record) => record.id));
-    const [projects, proposals, invoices] = await Promise.all([
+    // Milestones are found through their project's client, so all four
+    // queries run at once instead of milestones waiting for projects.
+    const [projects, proposals, invoices, milestones] = await Promise.all([
       this.projects.find({
         where: { clientId },
         order: { createdAt: 'DESC' },
@@ -158,16 +188,12 @@ export class ClientPortalService {
         relations: { lineItems: true },
         order: { issueDate: 'DESC', lineItems: { position: 'ASC' } },
       }),
+      this.milestones.find({
+        where: { project: { clientId } },
+        relations: { invoice: true },
+        order: { projectId: 'ASC', position: 'ASC' },
+      }),
     ]);
-
-    const milestones =
-      projects.length === 0
-        ? []
-        : await this.milestones.find({
-            where: { projectId: In(projects.map((project) => project.id)) },
-            relations: { invoice: true },
-            order: { projectId: 'ASC', position: 'ASC' },
-          });
 
     const invoiceResponses = invoices.map((invoice) =>
       toInvoiceResponse(invoice, now),

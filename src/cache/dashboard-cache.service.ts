@@ -2,10 +2,14 @@ import { CACHE_MANAGER, type Cache } from '@nestjs/cache-manager';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
 /**
- * Caches dashboard reads: an owner's dashboard numbers, and a client's portal
- * overview. Every key includes a per-owner (or per-client) version, and
- * `invalidate` / `invalidateClient` bump it, so a change shows up on the next
- * load instead of after the cache expires.
+ * Caches reads at three scopes:
+ * - per owner: dashboard numbers and the owner's lists (`wrap`);
+ * - per client record: what a person sees in their portal (`wrapForClients`);
+ * - per user: who they are and which client records they have (`wrapForUser`).
+ *
+ * Every key includes a version for its scope, and `invalidate`,
+ * `invalidateClient` and `invalidateUser` bump it, so a change shows up on
+ * the next load instead of after the cache expires.
  */
 @Injectable()
 export class DashboardCache {
@@ -33,9 +37,7 @@ export class DashboardCache {
     ttlMs: number,
   ): Promise<T> {
     const ids = [...clientIds].sort();
-    const versions = await Promise.all(
-      ids.map((id) => this.version('client-portal', id)),
-    );
+    const versions = await this.versions('client-portal', ids);
     return this.cache.wrap(
       `client-portal:${ids.join(',')}:v${versions.join('.')}:${key}`,
       load,
@@ -43,7 +45,20 @@ export class DashboardCache {
     );
   }
 
-  /** Call after any write that changes what the owner's dashboard shows. */
+  /** Caches a read about one signed-in user, such as their client records. */
+  wrapForUser<T>(
+    userId: string,
+    key: string,
+    load: () => Promise<T>,
+    ttlMs: number,
+  ): Promise<T> {
+    return this.wrapScoped('user', userId, key, load, ttlMs);
+  }
+
+  /**
+   * Call after any write that changes what the owner's dashboard or lists
+   * show.
+   */
   invalidate(ownerId: string): Promise<void> {
     return this.bump('dashboard', ownerId);
   }
@@ -51,6 +66,11 @@ export class DashboardCache {
   /** Call after any write that changes what a client sees in their portal. */
   invalidateClient(clientId: string | null | undefined): Promise<void> {
     return clientId ? this.bump('client-portal', clientId) : Promise.resolve();
+  }
+
+  /** Call after any write that changes which client records a user has. */
+  invalidateUser(userId: string | null | undefined): Promise<void> {
+    return userId ? this.bump('user', userId) : Promise.resolve();
   }
 
   private async wrapScoped<T>(
@@ -80,6 +100,21 @@ export class DashboardCache {
       return (await this.cache.get<number>(this.versionKey(scope, id))) ?? 0;
     } catch {
       return 0;
+    }
+  }
+
+  // All versions in one cache call, instead of one round trip per id.
+  private async versions(scope: string, ids: string[]): Promise<number[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    try {
+      const values = await this.cache.mget<number>(
+        ids.map((id) => this.versionKey(scope, id)),
+      );
+      return ids.map((_id, index) => values[index] ?? 0);
+    } catch {
+      return ids.map(() => 0);
     }
   }
 
