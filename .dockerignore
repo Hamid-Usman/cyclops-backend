@@ -1,0 +1,23 @@
+# Installed inside the image instead (yours were built for Windows).
+node_modules
+
+# Build output, rebuilt inside the image.
+dist
+# TypeScript's incremental cache. If it got in, tsc could decide nothing
+# changed and skip writing dist/ in the image.
+*.tsbuildinfo
+
+# Secrets stay out of the image; pass them as environment variables.
+.env
+.env.*
+!.env.example
+
+# Not needed to build or run the app.
+.git
+.gitignore
+.claude
+test
+coverage
+*.md
+Dockerfile
+.dockerignore
